@@ -68,6 +68,27 @@ const chatsDb: Record<string, ServerChat> = {};
 const messagesDb: Record<string, ServerMessage[]> = {};
 const readStatusDb: Record<string, Record<string, string[]>> = {};
 
+// Active Realtime SSE Streams
+let activeStreams: Array<{ writer: WritableStreamDefaultWriter<Uint8Array>; encoder: TextEncoder }> = [];
+
+async function broadcastEvent(type: string, data: any) {
+  const jsonString = JSON.stringify({ type, data, timestamp: new Date().toISOString() });
+  const payload = `data: ${jsonString}\n\n`;
+  const encoder = new TextEncoder();
+  const encoded = encoder.encode(payload);
+
+  const remaining: typeof activeStreams = [];
+  for (const client of activeStreams) {
+    try {
+      await client.writer.write(encoded);
+      remaining.push(client);
+    } catch {
+      // Disconnected stream
+    }
+  }
+  activeStreams = remaining;
+}
+
 let tablesInitialized = false;
 
 async function ensureTables(db: any) {
@@ -236,6 +257,107 @@ async function getD1UserById(db: any, id: string): Promise<ServerUser | null> {
     };
   } catch {
     return null;
+  }
+}
+
+async function getD1ChatsForUser(db: any, userId: string): Promise<ServerChat[]> {
+  if (!db) return [];
+  try {
+    const memberRows: any = await db.prepare(
+      'SELECT chat_id FROM chat_members WHERE user_id = ?'
+    ).bind(userId).all();
+
+    if (!memberRows || !memberRows.results || memberRows.results.length === 0) {
+      return [];
+    }
+
+    const chats: ServerChat[] = [];
+    for (const r of memberRows.results) {
+      const cId = r.chat_id;
+      const cRow: any = await db.prepare('SELECT * FROM chats WHERE id = ?').bind(cId).first();
+      if (!cRow) continue;
+
+      const members: any = await db.prepare(
+        'SELECT user_id FROM chat_members WHERE chat_id = ?'
+      ).bind(cId).all();
+      const memberIds = (members?.results || []).map((m: any) => m.user_id);
+
+      const lastMsgRow: any = await db.prepare(
+        'SELECT * FROM messages WHERE chat_id = ? ORDER BY iso_date DESC LIMIT 1'
+      ).bind(cId).first();
+
+      let lastMsg: ServerMessage | undefined = undefined;
+      if (lastMsgRow) {
+        lastMsg = {
+          id: lastMsgRow.id,
+          clientMsgId: lastMsgRow.client_msg_id,
+          chatId: lastMsgRow.chat_id,
+          senderId: lastMsgRow.sender_id,
+          senderName: lastMsgRow.sender_name,
+          text: lastMsgRow.text,
+          timestamp: lastMsgRow.timestamp,
+          isoDate: lastMsgRow.iso_date,
+          status: lastMsgRow.status || 'sent',
+          mediaUrl: lastMsgRow.media_url,
+          mediaType: lastMsgRow.media_type,
+          replyToId: lastMsgRow.reply_to_id,
+          replyToText: lastMsgRow.reply_to_text,
+          reactions: lastMsgRow.reactions_json ? JSON.parse(lastMsgRow.reactions_json) : [],
+          isEncrypted: Boolean(lastMsgRow.is_encrypted),
+          isEdited: Boolean(lastMsgRow.is_edited),
+        };
+      }
+
+      chats.push({
+        id: cRow.id,
+        name: cRow.name,
+        avatar: cRow.avatar || '',
+        isGroup: Boolean(cRow.is_group),
+        isSecret: Boolean(cRow.is_secret),
+        encryptionFingerprint: cRow.encryption_fingerprint || '',
+        selfDestructTimer: cRow.self_destruct_timer || 0,
+        memberIds,
+        lastMessage: lastMsg,
+        createdAt: cRow.created_at || new Date().toISOString(),
+      });
+    }
+    return chats;
+  } catch (err) {
+    console.error('getD1ChatsForUser error:', err);
+    return [];
+  }
+}
+
+async function getD1MessagesForChat(db: any, chatId: string): Promise<ServerMessage[]> {
+  if (!db) return [];
+  try {
+    const rows: any = await db.prepare(
+      'SELECT * FROM messages WHERE chat_id = ? ORDER BY iso_date ASC LIMIT 500'
+    ).bind(chatId).all();
+
+    if (!rows || !rows.results) return [];
+
+    return rows.results.map((m: any) => ({
+      id: m.id,
+      clientMsgId: m.client_msg_id,
+      chatId: m.chat_id,
+      senderId: m.sender_id,
+      senderName: m.sender_name,
+      text: m.text,
+      timestamp: m.timestamp,
+      isoDate: m.iso_date,
+      status: m.status || 'sent',
+      mediaUrl: m.media_url,
+      mediaType: m.media_type,
+      replyToId: m.reply_to_id,
+      replyToText: m.reply_to_text,
+      reactions: m.reactions_json ? JSON.parse(m.reactions_json) : [],
+      isEncrypted: Boolean(m.is_encrypted),
+      isEdited: Boolean(m.is_edited),
+    }));
+  } catch (err) {
+    console.error('getD1MessagesForChat error:', err);
+    return [];
   }
 }
 
@@ -489,8 +611,8 @@ export default {
         }
       }
 
-      // 4. Auth: Get Current User
-      if (pathname === '/api/auth/me' && request.method === 'GET') {
+      // 4. Auth: Get Current User (/api/me or /api/auth/me)
+      if ((pathname === '/api/auth/me' || pathname === '/api/me') && request.method === 'GET') {
         if (!decodedUser) {
           return jsonResponse({ error: 'Unauthorized: Invalid or missing token' }, 401);
         }
@@ -565,47 +687,54 @@ export default {
         }
         const currentUserId = decodedUser.id;
 
-        const userChats = Object.values(chatsDb)
-          .filter((c) => c.memberIds.includes(currentUserId))
-          .map((c) => {
-            const members = c.memberIds.map((id) => usersDb[id] || { id, name: 'User', username: '@user', avatar: '' });
-            const chatMsgs = messagesDb[c.id] || [];
-            const userReadIds = (readStatusDb[c.id] && readStatusDb[c.id][currentUserId]) || [];
-            const unreadCount = chatMsgs.filter(
-              (m) => m.senderId !== currentUserId && !userReadIds.includes(m.id) && m.status !== 'read'
-            ).length;
-
-            let displayName = c.name;
-            let displayAvatar = c.avatar;
-            if (!c.isGroup && !c.isSecret) {
-              const otherUser = members.find((m) => m.id !== currentUserId);
-              if (otherUser) {
-                displayName = otherUser.name;
-                displayAvatar = otherUser.avatar || c.avatar;
-              }
-            } else if (c.isSecret) {
-              const otherUser = members.find((m) => m.id !== currentUserId);
-              if (otherUser) {
-                displayName = `🔒 Secret Vault (${otherUser.name})`;
-              }
-            }
-
-            return {
-              id: c.id,
-              name: displayName,
-              avatar: displayAvatar,
-              isGroup: c.isGroup,
-              isSecret: c.isSecret,
-              unreadCount,
-              pinned: false,
-              encryptionFingerprint: c.encryptionFingerprint,
-              selfDestructTimer: c.selfDestructTimer,
-              members,
-              lastMessage: c.lastMessage,
-            };
+        let userChats = Object.values(chatsDb).filter((c) => c.memberIds.includes(currentUserId));
+        if (userChats.length === 0 && env.DB) {
+          const d1Chats = await getD1ChatsForUser(env.DB, currentUserId);
+          d1Chats.forEach((c) => {
+            chatsDb[c.id] = c;
           });
+          userChats = d1Chats;
+        }
 
-        return jsonResponse({ chats: userChats });
+        const responseChats = userChats.map((c) => {
+          const members = c.memberIds.map((id) => usersDb[id] || { id, name: 'User', username: '@user', avatar: '' });
+          const chatMsgs = messagesDb[c.id] || [];
+          const userReadIds = (readStatusDb[c.id] && readStatusDb[c.id][currentUserId]) || [];
+          const unreadCount = chatMsgs.filter(
+            (m) => m.senderId !== currentUserId && !userReadIds.includes(m.id) && m.status !== 'read'
+          ).length;
+
+          let displayName = c.name;
+          let displayAvatar = c.avatar;
+          if (!c.isGroup && !c.isSecret) {
+            const otherUser = members.find((m) => m.id !== currentUserId);
+            if (otherUser) {
+              displayName = otherUser.name;
+              displayAvatar = otherUser.avatar || c.avatar;
+            }
+          } else if (c.isSecret) {
+            const otherUser = members.find((m) => m.id !== currentUserId);
+            if (otherUser) {
+              displayName = `🔒 Secret Vault (${otherUser.name})`;
+            }
+          }
+
+          return {
+            id: c.id,
+            name: displayName,
+            avatar: displayAvatar,
+            isGroup: c.isGroup,
+            isSecret: c.isSecret,
+            unreadCount,
+            pinned: false,
+            encryptionFingerprint: c.encryptionFingerprint,
+            selfDestructTimer: c.selfDestructTimer,
+            members,
+            lastMessage: c.lastMessage,
+          };
+        });
+
+        return jsonResponse({ chats: responseChats });
       }
 
       // 7. Create Chat
@@ -670,7 +799,11 @@ export default {
         }
 
         const members = memberIds.map((id) => usersDb[id] || { id, name: 'User', username: '@user', avatar: '' });
-        return jsonResponse({ chat: { ...newChat, members, unreadCount: 0 } }, 201);
+        const resChat = { ...newChat, members, unreadCount: 0 };
+
+        broadcastEvent('chat:new', { chat: resChat });
+
+        return jsonResponse({ chat: resChat }, 201);
       }
 
       // 8. Get Messages for Chat
@@ -679,12 +812,16 @@ export default {
           return jsonResponse({ error: 'Unauthorized' }, 401);
         }
         const chatId = pathname.split('/')[3];
-        const msgs = messagesDb[chatId] || [];
-        return jsonResponse({ chatId, messages: msgs });
+        let msgs = messagesDb[chatId];
+        if ((!msgs || msgs.length === 0) && env.DB) {
+          msgs = await getD1MessagesForChat(env.DB, chatId);
+          messagesDb[chatId] = msgs;
+        }
+        return jsonResponse({ chatId, messages: msgs || [] });
       }
 
-      // 9. Send Message
-      if (pathname === '/api/messages' && request.method === 'POST') {
+      // 9. Send Message (/api/messages, /api/messages/send, /api/messages/reply)
+      if ((pathname === '/api/messages' || pathname === '/api/messages/send' || pathname === '/api/messages/reply') && request.method === 'POST') {
         if (!decodedUser) {
           return jsonResponse({ error: 'Unauthorized' }, 401);
         }
@@ -747,17 +884,24 @@ export default {
 
         if (env.DB) {
           await saveD1Message(env.DB, newMsg);
+          await saveD1Chat(env.DB, chat);
         }
+
+        broadcastEvent('message:new', { message: newMsg, chatId });
 
         return jsonResponse({ success: true, message: newMsg, ackTimestamp: new Date().toISOString() }, 201);
       }
 
-      // 10. Edit Message
-      if (pathname.match(/^\/api\/messages\/[^/]+\/edit$/) && request.method === 'POST') {
+      // 10. Edit Message (/api/messages/:id/edit or /api/messages/edit)
+      if ((pathname.match(/^\/api\/messages\/[^/]+\/edit$/) || pathname === '/api/messages/edit') && request.method === 'POST') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        const messageId = pathname.split('/')[3];
         const body: any = await request.json().catch(() => ({}));
+        const messageId = pathname.startsWith('/api/messages/edit') ? body.messageId || body.id : pathname.split('/')[3];
         const { text } = body;
+
+        if (!messageId || !text) {
+          return jsonResponse({ error: 'messageId and text are required' }, 400);
+        }
 
         let foundMsg: ServerMessage | null = null;
         let targetChatId: string | null = null;
@@ -782,19 +926,27 @@ export default {
           await saveD1Message(env.DB, foundMsg);
         }
 
+        broadcastEvent('message:edit', { chatId: targetChatId, messageId, text, isEdited: true });
+
         return jsonResponse({ success: true, message: foundMsg });
       }
 
-      // 11. Delete Message
-      if (pathname.match(/^\/api\/messages\/[^/]+\/delete$/) && request.method === 'POST') {
+      // 11. Delete Message (/api/messages/:id/delete or /api/messages/delete)
+      if ((pathname.match(/^\/api\/messages\/[^/]+\/delete$/) || pathname === '/api/messages/delete') && request.method === 'POST') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        const messageId = pathname.split('/')[3];
         const body: any = await request.json().catch(() => ({}));
+        const messageId = pathname.startsWith('/api/messages/delete') ? body.messageId || body.id : pathname.split('/')[3];
         const { deleteForEveryone } = body;
 
+        if (!messageId) {
+          return jsonResponse({ error: 'messageId is required' }, 400);
+        }
+
+        let targetChatId: string | null = null;
         for (const [cId, msgs] of Object.entries(messagesDb)) {
           const idx = msgs.findIndex((item) => item.id === messageId);
           if (idx !== -1) {
+            targetChatId = cId;
             if (deleteForEveryone) {
               msgs.splice(idx, 1);
             }
@@ -802,21 +954,31 @@ export default {
           }
         }
 
+        if (targetChatId) {
+          broadcastEvent('message:delete', { chatId: targetChatId, messageId, deleteForEveryone: Boolean(deleteForEveryone) });
+        }
+
         return jsonResponse({ success: true, messageId, deleteForEveryone: Boolean(deleteForEveryone) });
       }
 
-      // 12. Emoji Reaction
-      if (pathname.match(/^\/api\/messages\/[^/]+\/react$/) && request.method === 'POST') {
+      // 12. Emoji Reaction (/api/messages/:id/react or /api/messages/react)
+      if ((pathname.match(/^\/api\/messages\/[^/]+\/react$/) || pathname === '/api/messages/react') && request.method === 'POST') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        const messageId = pathname.split('/')[3];
         const body: any = await request.json().catch(() => ({}));
+        const messageId = pathname.startsWith('/api/messages/react') ? body.messageId || body.id : pathname.split('/')[3];
         const { emoji } = body;
 
+        if (!messageId || !emoji) {
+          return jsonResponse({ error: 'messageId and emoji are required' }, 400);
+        }
+
         let foundMsg: ServerMessage | null = null;
-        for (const [_, msgs] of Object.entries(messagesDb)) {
+        let targetChatId: string | null = null;
+        for (const [cId, msgs] of Object.entries(messagesDb)) {
           const m = msgs.find((item) => item.id === messageId);
           if (m) {
             foundMsg = m;
+            targetChatId = cId;
             break;
           }
         }
@@ -844,18 +1006,23 @@ export default {
           await saveD1Message(env.DB, foundMsg);
         }
 
+        if (targetChatId) {
+          broadcastEvent('message:react', { chatId: targetChatId, messageId, reactions: foundMsg.reactions });
+        }
+
         return jsonResponse({ success: true, reactions: foundMsg.reactions });
       }
 
       // 13. Pin Message
-      if (pathname.match(/^\/api\/chats\/[^/]+\/pin-message$/) && request.method === 'POST') {
+      if ((pathname.match(/^\/api\/chats\/[^/]+\/pin-message$/) || pathname === '/api/chats/pin-message') && request.method === 'POST') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
-        const chatId = pathname.split('/')[3];
         const body: any = await request.json().catch(() => ({}));
-        const { messageId } = body;
+        const chatId = pathname.includes('/pin-message') && !pathname.endsWith('/pin-message') ? pathname.split('/')[3] : body.chatId;
+        const messageId = body.messageId;
 
-        if (chatsDb[chatId]) {
+        if (chatId && chatsDb[chatId]) {
           chatsDb[chatId].pinnedMessageId = messageId || undefined;
+          broadcastEvent('chat:pin_message', { chatId, pinnedMessageId: messageId });
         }
 
         return jsonResponse({ success: true, pinnedMessageId: messageId });
@@ -864,16 +1031,29 @@ export default {
       // 14. Mark Read
       if (pathname.match(/^\/api\/chats\/[^/]+\/read$/) && request.method === 'POST') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const chatId = pathname.split('/')[3];
+        broadcastEvent('message:read', { chatId, readMessageIds: [] });
         return jsonResponse({ success: true, readCount: 1 });
       }
 
       // 15. Typing Status
       if (pathname.match(/^\/api\/chats\/[^/]+\/typing$/) && request.method === 'POST') {
+        if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const chatId = pathname.split('/')[3];
+        const body: any = await request.json().catch(() => ({}));
+        broadcastEvent('typing:change', { chatId, userId: decodedUser.id, isTyping: Boolean(body.isTyping) });
         return jsonResponse({ success: true });
       }
 
       // 16. Presence Status
-      if (pathname === '/api/presence' && request.method === 'POST') {
+      if ((pathname === '/api/presence' || pathname === '/api/users/presence') && request.method === 'POST') {
+        if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const body: any = await request.json().catch(() => ({}));
+        if (usersDb[decodedUser.id]) {
+          usersDb[decodedUser.id].status = body.status || 'online';
+          usersDb[decodedUser.id].lastSeen = 'Just now';
+        }
+        broadcastEvent('presence:change', { userId: decodedUser.id, status: body.status || 'online', lastSeen: 'Just now' });
         return jsonResponse({ success: true });
       }
 
@@ -881,11 +1061,21 @@ export default {
       if (pathname === '/api/sync' && request.method === 'GET') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         const currentUserId = decodedUser.id;
-        const userChats = Object.values(chatsDb).filter((c) => c.memberIds.includes(currentUserId));
+        let userChats = Object.values(chatsDb).filter((c) => c.memberIds.includes(currentUserId));
+
+        if (userChats.length === 0 && env.DB) {
+          userChats = await getD1ChatsForUser(env.DB, currentUserId);
+        }
+
         const userMessagesMap: Record<string, ServerMessage[]> = {};
-        userChats.forEach((c) => {
-          userMessagesMap[c.id] = messagesDb[c.id] || [];
-        });
+        for (const c of userChats) {
+          let msgs = messagesDb[c.id];
+          if ((!msgs || msgs.length === 0) && env.DB) {
+            msgs = await getD1MessagesForChat(env.DB, c.id);
+            messagesDb[c.id] = msgs;
+          }
+          userMessagesMap[c.id] = msgs || [];
+        }
 
         return jsonResponse({
           timestamp: new Date().toISOString(),
@@ -903,10 +1093,13 @@ export default {
       }
 
       // 19. Realtime Stream (SSE)
-      if (pathname === '/api/realtime/stream') {
+      if (pathname === '/api/realtime' || pathname === '/api/realtime/stream') {
         const { readable, writable } = new TransformStream();
         const writer = writable.getWriter();
         const encoder = new TextEncoder();
+
+        activeStreams.push({ writer, encoder });
+
         writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() })}\n\n`));
 
         return new Response(readable, {

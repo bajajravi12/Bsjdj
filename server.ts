@@ -288,7 +288,7 @@ app.post(['/api/auth/login', '/api/auth/signin'], (req, res) => {
 });
 
 // 4. Auth: Get Current User Profile
-app.get('/api/auth/me', authenticateJWT, (req: any, res) => {
+app.get(['/api/auth/me', '/api/me'], authenticateJWT, (req: any, res) => {
   const user = usersDb[req.user.id];
   if (!user) {
     return res.status(404).json({ error: 'User profile not found' });
@@ -315,7 +315,7 @@ app.get('/api/users/search', authenticateJWT, (req: any, res) => {
 });
 
 // 6. Realtime SSE Stream Endpoint
-app.get('/api/realtime/stream', (req, res) => {
+app.get(['/api/realtime/stream', '/api/realtime'], (req, res) => {
   const token = req.query.token as string;
   if (!token) {
     return res.status(401).send('Unauthorized: Missing realtime token');
@@ -488,7 +488,7 @@ app.get('/api/chats/:chatId/messages', authenticateJWT, (req: any, res) => {
 });
 
 // 10. Send Message (with ACK & Deduplication)
-app.post('/api/messages', authenticateJWT, (req: any, res) => {
+app.post(['/api/messages', '/api/messages/send', '/api/messages/reply'], authenticateJWT, (req: any, res) => {
   const currentUserId = req.user.id;
   const { chatId, text, mediaType, mediaUrl, replyToId, replyToText, clientMsgId } = req.body;
 
@@ -545,9 +545,9 @@ app.post('/api/messages', authenticateJWT, (req: any, res) => {
 });
 
 // Edit Message Endpoint
-app.post('/api/messages/:id/edit', authenticateJWT, (req: any, res) => {
+app.post(['/api/messages/:id/edit', '/api/messages/edit'], authenticateJWT, (req: any, res) => {
   const currentUserId = req.user.id;
-  const messageId = req.params.id;
+  const messageId = req.params.id || req.body.messageId || req.body.id;
   const { text } = req.body;
 
   if (!text || !text.trim()) {
@@ -595,9 +595,9 @@ app.post('/api/messages/:id/edit', authenticateJWT, (req: any, res) => {
 });
 
 // Delete Message Endpoint
-app.post('/api/messages/:id/delete', authenticateJWT, (req: any, res) => {
+app.post(['/api/messages/:id/delete', '/api/messages/delete'], authenticateJWT, (req: any, res) => {
   const currentUserId = req.user.id;
-  const messageId = req.params.id;
+  const messageId = req.params.id || req.body.messageId || req.body.id;
   const { deleteForEveryone } = req.body;
 
   let targetChatId: string | null = null;
@@ -628,9 +628,9 @@ app.post('/api/messages/:id/delete', authenticateJWT, (req: any, res) => {
 });
 
 // Toggle Emoji Reaction Endpoint
-app.post('/api/messages/:id/react', authenticateJWT, (req: any, res) => {
+app.post(['/api/messages/:id/react', '/api/messages/react'], authenticateJWT, (req: any, res) => {
   const currentUserId = req.user.id;
-  const messageId = req.params.id;
+  const messageId = req.params.id || req.body.messageId || req.body.id;
   const { emoji } = req.body;
 
   if (!emoji) {
@@ -768,7 +768,7 @@ app.post('/api/chats/:chatId/typing', authenticateJWT, (req: any, res) => {
 });
 
 // 13. Presence Heartbeat
-app.post('/api/presence', authenticateJWT, (req: any, res) => {
+app.post(['/api/presence', '/api/users/presence'], authenticateJWT, (req: any, res) => {
   const currentUserId = req.user.id;
   const { status } = req.body;
 
