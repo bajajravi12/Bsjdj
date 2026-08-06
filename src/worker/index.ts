@@ -2,7 +2,6 @@
 
 export interface Env {
   DB?: any;
-  MEDIA_BUCKET?: any;
   JWT_SECRET: string;
   ASSETS?: {
     fetch: (request: Request) => Promise<Response>;
@@ -21,7 +20,6 @@ export default {
             status: 'ok',
             runtime: 'Cloudflare Workers',
             d1Bound: Boolean(env.DB),
-            r2Bound: Boolean(env.MEDIA_BUCKET),
             e2eeActive: true,
             timestamp: new Date().toISOString(),
           }),

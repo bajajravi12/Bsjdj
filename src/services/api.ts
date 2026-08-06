@@ -325,23 +325,6 @@ export const apiSync = async (since?: string) => {
   }
 };
 
-export const apiUploadR2Media = async (fileName: string, dataUrl: string) => {
-  const token = getAuthToken();
-  try {
-    const res = await fetch(`${API_BASE}/upload`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ fileName, dataUrl }),
-    });
-    return await parseResponseJson(res);
-  } catch {
-    return { publicUrl: dataUrl };
-  }
-};
-
 // --- REALTIME SSE STREAM SUBSCRIPTION ---
 
 let eventSourceInstance: EventSource | null = null;

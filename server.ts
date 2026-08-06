@@ -806,16 +806,14 @@ app.get('/api/sync', authenticateJWT, (req: any, res) => {
   });
 });
 
-// 15. R2 Media Upload Handler
+// 15. Media Upload Handler
 app.post('/api/upload', authenticateJWT, (req, res) => {
-  const { fileName, dataUrl } = req.body;
+  const { dataUrl } = req.body;
   const sampleUrl = dataUrl || 'https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=800&q=80';
 
   res.json({
     success: true,
-    r2Key: `media/aarvi-${Date.now()}-${fileName || 'upload.jpg'}`,
     publicUrl: sampleUrl,
-    bucket: 'aarvi-media',
   });
 });
 
