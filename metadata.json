@@ -1,0 +1,11 @@
+{
+  "name": "AARVI",
+  "description": "Secure, real-time private messaging application with end-to-end encryption, secret chats, voice notes, calls, and instant media sharing.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

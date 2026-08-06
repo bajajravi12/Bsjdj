@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aarvi-secure-messenger",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aarvi-db",
+      "database_id": "aarvi-d1-db-id",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "aarvi-media"
+    }
+  ],
+  "vars": {
+    "JWT_SECRET": "aarvi-secure-e2ee-jwt-secret-key-2026",
+    "ENVIRONMENT": "production"
+  }
+}
