@@ -1,6 +1,7 @@
 import React from 'react';
 import { Chat, Message } from '../types';
 import { Share2, X, Send } from 'lucide-react';
+import { getDisplayAvatar } from '../utils/avatar';
 
 interface ForwardModalProps {
   isOpen: boolean;
@@ -57,9 +58,9 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
             >
               <div className="flex items-center space-x-3">
                 <img
-                  src={chat.avatar}
+                  src={getDisplayAvatar(chat.name, chat.avatar, chat.id)}
                   alt={chat.name}
-                  className="w-9 h-9 rounded-full object-cover border border-slate-700"
+                  className="w-9 h-9 rounded-full object-cover border border-slate-700 bg-slate-800"
                 />
                 <div>
                   <h4 className="text-xs font-bold text-slate-200 group-hover:text-emerald-400">

@@ -16,6 +16,7 @@ import {
   apiDeleteMessage,
   apiReactToMessage,
   apiPinMessage,
+  apiSendPresence,
   subscribeRealtimeEvents, 
   apiSync, 
   clearAuthToken, 
@@ -133,10 +134,39 @@ export default function App() {
             return {
               ...prevMap,
               [chatId]: currentMsgs.map((m) =>
-                (readMessageIds || []).includes(m.id) ? { ...m, status: 'read' as const } : m
+                (!readMessageIds || readMessageIds.length === 0 || readMessageIds.includes(m.id))
+                  ? { ...m, status: 'read' as const }
+                  : m
               ),
             };
           });
+          setChats((prev) =>
+            (prev || []).map((c) =>
+              c.id === chatId && c.lastMessage
+                ? { ...c, lastMessage: { ...c.lastMessage, status: 'read' } }
+                : c
+            )
+          );
+        } else if (type === 'message:delivered') {
+          const { chatId, deliveredMessageIds } = data;
+          setMessagesMap((prevMap) => {
+            const currentMsgs = prevMap[chatId] || [];
+            return {
+              ...prevMap,
+              [chatId]: currentMsgs.map((m) =>
+                (!deliveredMessageIds || deliveredMessageIds.includes(m.id))
+                  ? { ...m, status: m.status === 'read' ? 'read' : ('delivered' as const) }
+                  : m
+              ),
+            };
+          });
+          setChats((prev) =>
+            (prev || []).map((c) =>
+              c.id === chatId && c.lastMessage && c.lastMessage.status !== 'read'
+                ? { ...c, lastMessage: { ...c.lastMessage, status: 'delivered' } }
+                : c
+            )
+          );
         } else if (type === 'message:edit') {
           const { chatId, messageId, text } = data;
           setMessagesMap((prevMap) => {
@@ -241,6 +271,36 @@ export default function App() {
       window.removeEventListener('focus', handleVisibilityChange);
     };
   }, [isLoggedIn]);
+
+  // Realtime Heartbeat & Auto-Offline Detection
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser) return;
+
+    // Initial online presence trigger
+    apiSendPresence('online').catch(() => {});
+
+    // Heartbeat every 22 seconds
+    const interval = setInterval(() => {
+      apiSendPresence('online').catch(() => {});
+    }, 22000);
+
+    const handleBeforeUnload = () => {
+      try {
+        const token = localStorage.getItem('aarvi_token') || '';
+        const blob = new Blob([JSON.stringify({ status: 'offline' })], { type: 'application/json' });
+        navigator.sendBeacon('/api/presence', blob);
+      } catch (e) {}
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+    };
+  }, [isLoggedIn, currentUser?.id]);
 
   // 5. App Settings State
   const [appSettings, setAppSettings] = useState<AppSettings>(() => {

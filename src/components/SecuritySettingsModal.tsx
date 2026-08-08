@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, AppSettings } from '../types';
+import { getDisplayAvatar } from '../utils/avatar';
 import { 
   ShieldCheck, 
   Key, 
@@ -111,9 +112,9 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
             {/* User Profile Summary */}
             <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 flex items-center space-x-3">
               <img
-                src={currentUser.avatar}
+                src={getDisplayAvatar(currentUser.name, currentUser.avatar, currentUser.username)}
                 alt={currentUser.name}
-                className="w-11 h-11 rounded-full object-cover border border-slate-700"
+                className="w-11 h-11 rounded-full object-cover border border-slate-700 bg-slate-800"
               />
               <div className="flex-1 min-w-0">
                 <h4 className="text-sm font-bold text-white truncate">{currentUser.name}</h4>

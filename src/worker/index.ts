@@ -68,6 +68,34 @@ const chatsDb: Record<string, ServerChat> = {};
 const messagesDb: Record<string, ServerMessage[]> = {};
 const readStatusDb: Record<string, Record<string, string[]>> = {};
 
+const AVATAR_COLORS = [
+  '#059669', '#2563eb', '#7c3aed', '#db2777', '#d97706',
+  '#0891b2', '#0d9488', '#4f46e5', '#ea580c', '#65a30d'
+];
+
+function getInitials(name: string): string {
+  if (!name || !name.trim()) return 'U';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0][0].toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function getAvatarColor(key: string): string {
+  if (!key) return AVATAR_COLORS[0];
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = key.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function generateInitialsAvatarSvg(name: string, keyForColor?: string): string {
+  const initials = getInitials(name);
+  const color = getAvatarColor(keyForColor || name);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="100%" height="100%" rx="64" fill="${color}"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="52" fill="#ffffff">${initials}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
 // Active Realtime SSE Streams
 let activeStreams: Array<{ writer: WritableStreamDefaultWriter<Uint8Array>; encoder: TextEncoder }> = [];
 
@@ -104,6 +132,9 @@ async function ensureTables(db: any) {
         bio TEXT,
         public_key TEXT,
         pin_hash TEXT,
+        status TEXT DEFAULT 'offline',
+        last_seen TEXT,
+        last_active_timestamp INTEGER,
         is_verified INTEGER DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );`),
@@ -519,25 +550,18 @@ export default {
           }
 
           const userId = `usr-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-          const avatars = [
-            'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
-            'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80',
-            'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80',
-            'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=150&q=80',
-            'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=150&q=80',
-          ];
-          const avatarIndex = Object.keys(usersDb).length % avatars.length;
+          const defaultAvatar = generateInitialsAvatarSvg(rawName, cleanUsername);
 
           const newUser: ServerUser = {
             id: userId,
             name: rawName,
             username: cleanUsername,
             bio: bio || 'AARVI User',
-            avatar: avatars[avatarIndex],
+            avatar: defaultAvatar,
             publicKey: `E2EE-KEY-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
             pinHash: rawPin,
             status: 'online',
-            lastSeen: 'Just now',
+            lastSeen: new Date().toISOString(),
             isVerified: true,
           };
 
@@ -623,14 +647,16 @@ export default {
         }
 
         if (!user) {
+          const userName = decodedUser.name || 'User';
+          const userUname = decodedUser.username || '@user';
           user = {
             id: decodedUser.id,
-            name: decodedUser.name || 'User',
-            username: decodedUser.username || '@user',
-            avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+            name: userName,
+            username: userUname,
+            avatar: generateInitialsAvatarSvg(userName, userUname),
             publicKey: 'E2EE-KEY-DEFAULT',
             status: 'online',
-            lastSeen: 'Just now',
+            lastSeen: new Date().toISOString(),
             isVerified: true,
           };
           usersDb[user.id] = user;
@@ -782,7 +808,7 @@ export default {
           name: defaultName,
           avatar: recipientUser
             ? recipientUser.avatar
-            : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+            : generateInitialsAvatarSvg(defaultName, chatId),
           isGroup: Boolean(isGroup),
           isSecret: Boolean(isSecret),
           encryptionFingerprint: `KEY-${Math.floor(Math.random() * 8999 + 1000)}-AARVI-PROT`,
@@ -859,6 +885,10 @@ export default {
         const senderUser = usersDb[currentUserId];
         const msgId = `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
+        const otherMembers = (chat.memberIds || []).filter((id) => id !== currentUserId);
+        const recipientOnline = otherMembers.some((id) => usersDb[id]?.status === 'online');
+        const initialStatus: 'sent' | 'delivered' = recipientOnline ? 'delivered' : 'sent';
+
         const newMsg: ServerMessage = {
           id: msgId,
           clientMsgId,
@@ -868,7 +898,7 @@ export default {
           text,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           isoDate: new Date().toISOString(),
-          status: 'sent',
+          status: initialStatus,
           mediaType,
           mediaUrl,
           replyToId,
@@ -888,6 +918,9 @@ export default {
         }
 
         broadcastEvent('message:new', { message: newMsg, chatId });
+        if (initialStatus === 'delivered') {
+          broadcastEvent('message:delivered', { chatId, deliveredMessageIds: [msgId] });
+        }
 
         return jsonResponse({ success: true, message: newMsg, ackTimestamp: new Date().toISOString() }, 201);
       }
@@ -1032,8 +1065,37 @@ export default {
       if (pathname.match(/^\/api\/chats\/[^/]+\/read$/) && request.method === 'POST') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         const chatId = pathname.split('/')[3];
-        broadcastEvent('message:read', { chatId, readMessageIds: [] });
-        return jsonResponse({ success: true, readCount: 1 });
+        const currentUserId = decodedUser.id;
+
+        const msgs = messagesDb[chatId] || [];
+        const newlyReadIds: string[] = [];
+
+        for (const m of msgs) {
+          if (m.senderId !== currentUserId) {
+            if (m.status !== 'read') {
+              m.status = 'read';
+              newlyReadIds.push(m.id);
+            }
+          }
+        }
+
+        if (env.DB && newlyReadIds.length > 0) {
+          try {
+            await env.DB.prepare(
+              `UPDATE messages SET status = 'read' WHERE chat_id = ? AND sender_id != ?`
+            ).bind(chatId, currentUserId).run();
+          } catch (e) {
+            console.error('Failed to update message read status in D1:', e);
+          }
+        }
+
+        const chat = chatsDb[chatId];
+        if (chat && chat.lastMessage && chat.lastMessage.senderId !== currentUserId) {
+          chat.lastMessage.status = 'read';
+        }
+
+        broadcastEvent('message:read', { chatId, userId: currentUserId, readMessageIds: newlyReadIds });
+        return jsonResponse({ success: true, readCount: newlyReadIds.length });
       }
 
       // 15. Typing Status
@@ -1049,12 +1111,24 @@ export default {
       if ((pathname === '/api/presence' || pathname === '/api/users/presence') && request.method === 'POST') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         const body: any = await request.json().catch(() => ({}));
+        const status = body.status === 'offline' ? 'offline' : 'online';
+        const nowIso = new Date().toISOString();
+
         if (usersDb[decodedUser.id]) {
-          usersDb[decodedUser.id].status = body.status || 'online';
-          usersDb[decodedUser.id].lastSeen = 'Just now';
+          usersDb[decodedUser.id].status = status;
+          usersDb[decodedUser.id].lastSeen = nowIso;
         }
-        broadcastEvent('presence:change', { userId: decodedUser.id, status: body.status || 'online', lastSeen: 'Just now' });
-        return jsonResponse({ success: true });
+
+        if (env.DB) {
+          try {
+            await env.DB.prepare(
+              `UPDATE users SET status = ?, last_seen = ?, last_active_timestamp = ? WHERE id = ?`
+            ).bind(status, nowIso, Date.now(), decodedUser.id).run();
+          } catch (e) {}
+        }
+
+        broadcastEvent('presence:change', { userId: decodedUser.id, status, lastSeen: nowIso });
+        return jsonResponse({ success: true, status, lastSeen: nowIso });
       }
 
       // 17. Full Sync

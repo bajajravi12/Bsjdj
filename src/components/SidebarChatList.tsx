@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Chat, User } from '../types';
+import { getDisplayAvatar } from '../utils/avatar';
 import { 
   Search, 
   Plus, 
@@ -170,6 +171,7 @@ export const SidebarChatList: React.FC<SidebarChatListProps> = ({
                 chat={chat}
                 isSelected={chat.id === activeChatId}
                 onSelect={() => onSelectChat(chat.id)}
+                currentUserId={currentUser.id}
               />
             ))}
           </div>
@@ -188,6 +190,7 @@ export const SidebarChatList: React.FC<SidebarChatListProps> = ({
               chat={chat}
               isSelected={chat.id === activeChatId}
               onSelect={() => onSelectChat(chat.id)}
+              currentUserId={currentUser.id}
             />
           ))}
 
@@ -205,9 +208,9 @@ export const SidebarChatList: React.FC<SidebarChatListProps> = ({
         <div className="flex items-center space-x-2.5">
           <div className="relative">
             <img
-              src={currentUser.avatar}
+              src={getDisplayAvatar(currentUser.name, currentUser.avatar, currentUser.username)}
               alt={currentUser.name}
-              className="w-9 h-9 rounded-full object-cover border border-slate-700"
+              className="w-9 h-9 rounded-full object-cover border border-slate-700 bg-slate-800"
             />
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 absolute bottom-0 right-0 ring-2 ring-slate-950" />
           </div>
@@ -234,10 +237,14 @@ interface ChatRowProps {
   chat: Chat;
   isSelected: boolean;
   onSelect: () => void;
+  currentUserId?: string;
 }
 
-const ChatRow: React.FC<ChatRowProps> = ({ chat, isSelected, onSelect }) => {
+const ChatRow: React.FC<ChatRowProps> = ({ chat, isSelected, onSelect, currentUserId }) => {
   const lastMsg = chat.lastMessage;
+  const otherMember = (chat.members || []).find((m) => m.id !== currentUserId && m.id !== 'usr-self');
+  const isOtherOnline = otherMember ? otherMember.status === 'online' : true;
+  const displayAvatar = getDisplayAvatar(chat.name, chat.avatar, chat.id);
 
   return (
     <div
@@ -251,16 +258,18 @@ const ChatRow: React.FC<ChatRowProps> = ({ chat, isSelected, onSelect }) => {
       {/* Avatar */}
       <div className="relative flex-shrink-0">
         <img
-          src={chat.avatar}
+          src={displayAvatar}
           alt={chat.name}
-          className="w-11 h-11 rounded-full object-cover border border-slate-800"
+          className="w-11 h-11 rounded-full object-cover border border-slate-800 bg-slate-800"
         />
         {chat.isSecret ? (
           <span className="w-4 h-4 rounded-full bg-amber-500 text-slate-950 text-[9px] flex items-center justify-center absolute -bottom-0.5 -right-0.5 ring-2 ring-slate-900 font-bold">
             🔒
           </span>
-        ) : (
+        ) : isOtherOnline ? (
           <span className="w-3 h-3 rounded-full bg-emerald-400 absolute bottom-0 right-0 ring-2 ring-slate-900" />
+        ) : (
+          <span className="w-3 h-3 rounded-full bg-slate-600 absolute bottom-0 right-0 ring-2 ring-slate-900" />
         )}
       </div>
 
@@ -288,9 +297,9 @@ const ChatRow: React.FC<ChatRowProps> = ({ chat, isSelected, onSelect }) => {
               </span>
             ) : lastMsg ? (
               <span>
-                {lastMsg.senderId === 'usr-self' && (
-                  <span className="text-emerald-400 mr-1 font-semibold">
-                    {lastMsg.status === 'read' ? '✓✓' : '✓'}
+                {(lastMsg.senderId === currentUserId || lastMsg.senderId === 'usr-self') && (
+                  <span className={`mr-1 font-bold ${lastMsg.status === 'read' ? 'text-cyan-400' : 'text-slate-400'}`}>
+                    {lastMsg.status === 'read' ? '✓✓' : lastMsg.status === 'delivered' ? '✓✓' : '✓'}
                   </span>
                 )}
                 {lastMsg.mediaType ? `[${lastMsg.mediaType.toUpperCase()}] ` : ''}

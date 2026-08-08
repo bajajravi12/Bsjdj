@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User } from '../types';
 import { apiSearchUsers, apiCreateChat } from '../services/api';
+import { getDisplayAvatar } from '../utils/avatar';
 import { 
   Plus, 
   X, 
@@ -194,9 +195,9 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
                     >
                       <div className="flex items-center space-x-3">
                         <img
-                          src={u.avatar}
+                          src={getDisplayAvatar(u.name, u.avatar, u.username)}
                           alt={u.name}
-                          className="w-8 h-8 rounded-full object-cover"
+                          className="w-8 h-8 rounded-full object-cover bg-slate-800"
                         />
                         <div>
                           <h5 className="font-bold text-xs">{u.name}</h5>

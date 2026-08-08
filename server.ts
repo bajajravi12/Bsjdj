@@ -43,7 +43,36 @@ export interface ServerUser {
   pinHash?: string;
   status: 'online' | 'offline' | 'away';
   lastSeen: string;
+  lastActiveTimestamp?: number;
   isVerified?: boolean;
+}
+
+const AVATAR_COLORS = [
+  '#059669', '#2563eb', '#7c3aed', '#db2777', '#d97706',
+  '#0891b2', '#0d9488', '#4f46e5', '#ea580c', '#65a30d'
+];
+
+function getInitials(name: string): string {
+  if (!name || !name.trim()) return 'U';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0][0].toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function getAvatarColor(key: string): string {
+  if (!key) return AVATAR_COLORS[0];
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = key.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function generateInitialsAvatarSvg(name: string, keyForColor?: string): string {
+  const initials = getInitials(name);
+  const color = getAvatarColor(keyForColor || name);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="100%" height="100%" rx="64" fill="${color}"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="52" fill="#ffffff">${initials}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
 export interface ServerReaction {
@@ -194,25 +223,19 @@ app.post(['/api/auth/register', '/api/auth/signup'], (req, res) => {
     }
 
     const userId = `usr-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const avatarIndex = (Object.keys(usersDb).length % 5) + 1;
-    const avatars = [
-      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
-      'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80',
-      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80',
-      'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=150&q=80',
-      'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=150&q=80',
-    ];
+    const defaultAvatar = generateInitialsAvatarSvg(rawName, cleanUsername);
 
     const newUser: ServerUser = {
       id: userId,
       name: rawName,
       username: cleanUsername,
       bio: bio || 'AARVI User',
-      avatar: avatars[avatarIndex - 1],
+      avatar: defaultAvatar,
       publicKey: `E2EE-KEY-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
       pinHash: rawPin,
       status: 'online',
-      lastSeen: 'Just now',
+      lastSeen: new Date().toISOString(),
+      lastActiveTimestamp: Date.now(),
       isVerified: true,
     };
 
@@ -358,7 +381,7 @@ app.get(['/api/realtime/stream', '/api/realtime'], (req, res) => {
       const remainingUserClients = sseClients.filter((c) => c.userId === userId);
       if (remainingUserClients.length === 0) {
         usersDb[userId].status = 'offline';
-        usersDb[userId].lastSeen = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        usersDb[userId].lastSeen = new Date().toISOString();
         broadcastToAll('presence:change', { userId, status: 'offline', lastSeen: usersDb[userId].lastSeen });
       }
     }
@@ -454,12 +477,14 @@ app.post('/api/chats', authenticateJWT, (req: any, res) => {
     ? recipientUser.name
     : name || 'AARVI Conversation';
 
+  const chatAvatar = recipientUser
+    ? recipientUser.avatar
+    : generateInitialsAvatarSvg(defaultName, chatId);
+
   const newChat: ServerChat = {
     id: chatId,
     name: defaultName,
-    avatar: recipientUser
-      ? recipientUser.avatar
-      : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+    avatar: chatAvatar,
     isGroup: Boolean(isGroup),
     isSecret: Boolean(isSecret),
     encryptionFingerprint: `KEY-${Math.floor(Math.random() * 8999 + 1000)}-AARVI-PROT`,

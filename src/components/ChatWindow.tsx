@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Chat, Message, User } from '../types';
 import { apiSetTyping, apiMarkRead } from '../services/api';
+import { getDisplayAvatar } from '../utils/avatar';
+import { formatLastSeen } from '../utils/presence';
 import { 
   Lock, 
   Paperclip, 
@@ -293,6 +295,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
   const pinnedMsg = (messages || []).find((m) => m.id === chat.pinnedMessageId || m.isPinned);
 
+  const otherMember = (chat.members || []).find((m) => m.id !== currentUser.id && m.id !== 'usr-self');
+  const presenceInfo = formatLastSeen(otherMember?.status, otherMember?.lastSeen);
+  const displayAvatar = getDisplayAvatar(chat.name, chat.avatar, chat.id);
+
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-950 relative overflow-hidden font-sans select-none">
       {/* Toast Feedback */}
@@ -317,11 +323,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
           <div className="relative">
             <img
-              src={chat.avatar}
+              src={displayAvatar}
               alt={chat.name}
-              className="w-10 h-10 rounded-full object-cover border border-slate-700"
+              className="w-10 h-10 rounded-full object-cover border border-slate-700 bg-slate-800"
             />
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 absolute bottom-0 right-0 ring-2 ring-slate-900" />
+            {presenceInfo.isOnline ? (
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 absolute bottom-0 right-0 ring-2 ring-slate-900" />
+            ) : (
+              <span className="w-2.5 h-2.5 rounded-full bg-slate-600 absolute bottom-0 right-0 ring-2 ring-slate-900" />
+            )}
           </div>
 
           <div>
@@ -333,9 +343,19 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
-              <Lock className="w-2.5 h-2.5" /> E2EE Fingerprint: {chat.encryptionFingerprint.slice(0, 12)}...
-            </p>
+            <div className="text-[11px] font-medium flex items-center gap-2">
+              {presenceInfo.isOnline ? (
+                <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Online
+                </span>
+              ) : (
+                <span className="text-slate-400">{presenceInfo.text}</span>
+              )}
+              <span className="text-slate-600">&bull;</span>
+              <span className="text-slate-500 font-mono text-[10px]">
+                E2EE Key: {chat.encryptionFingerprint.slice(0, 10)}...
+              </span>
+            </div>
           </div>
         </div>
 
@@ -538,11 +558,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     {isSelf && (
                       <span className="font-bold ml-0.5">
                         {msg.status === 'read' ? (
-                          <CheckCheck className="w-3 h-3 text-emerald-300 inline" />
+                          <CheckCheck className="w-3.5 h-3.5 text-cyan-300 inline" title="Read" />
                         ) : msg.status === 'delivered' ? (
-                          <CheckCheck className="w-3 h-3 opacity-80 inline" />
+                          <CheckCheck className="w-3.5 h-3.5 text-emerald-100/90 inline" title="Delivered" />
                         ) : msg.status === 'sent' ? (
-                          <Check className="w-3 h-3 opacity-80 inline" />
+                          <Check className="w-3.5 h-3.5 text-emerald-100/90 inline" title="Sent" />
                         ) : (
                           '🕒'
                         )}
