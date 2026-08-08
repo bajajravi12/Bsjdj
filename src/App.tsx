@@ -247,19 +247,64 @@ export default function App() {
     };
   }, [isLoggedIn, currentUser?.id, activeChatId]);
 
-  // 4. Background Recovery Handler (Visibility / Window Focus)
+  // 4. Background Periodic Sync & Recovery Handler
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && isLoggedIn) {
-        apiSync(lastSyncTimestampRef.current).then((syncRes) => {
-          if (syncRes && syncRes.chats) {
-            setChats(syncRes.chats);
-            if (syncRes.messagesMap) {
-              setMessagesMap((prev) => ({ ...prev, ...syncRes.messagesMap }));
-            }
-            lastSyncTimestampRef.current = syncRes.timestamp;
+    if (!isLoggedIn || !currentUser) return;
+
+    const pollSync = async () => {
+      try {
+        const syncRes = await apiSync();
+        if (syncRes && syncRes.chats) {
+          setChats((prevChats) => {
+            const typingMap = new Map((prevChats || []).map((c) => [c.id, c.isTyping]));
+            return syncRes.chats.map((c: Chat) => ({
+              ...c,
+              isTyping: typingMap.get(c.id) || false,
+            }));
+          });
+
+          if (syncRes.messagesMap) {
+            setMessagesMap((prevMap) => {
+              let updated = false;
+              const nextMap = { ...prevMap };
+
+              for (const [cId, msgs] of Object.entries(syncRes.messagesMap)) {
+                const incomingMsgs = msgs as Message[];
+                const existingMsgs = prevMap[cId] || [];
+
+                if (existingMsgs.length !== incomingMsgs.length) {
+                  nextMap[cId] = incomingMsgs;
+                  updated = true;
+                } else {
+                  for (let i = 0; i < incomingMsgs.length; i++) {
+                    if (
+                      existingMsgs[i]?.id !== incomingMsgs[i]?.id ||
+                      existingMsgs[i]?.status !== incomingMsgs[i]?.status ||
+                      existingMsgs[i]?.text !== incomingMsgs[i]?.text ||
+                      existingMsgs[i]?.isEdited !== incomingMsgs[i]?.isEdited ||
+                      JSON.stringify(existingMsgs[i]?.reactions) !== JSON.stringify(incomingMsgs[i]?.reactions)
+                    ) {
+                      nextMap[cId] = incomingMsgs;
+                      updated = true;
+                      break;
+                    }
+                  }
+                }
+              }
+
+              return updated ? nextMap : prevMap;
+            });
           }
-        });
+        }
+      } catch (err) {}
+    };
+
+    // Auto-poll every 3 seconds for seamless cross-isolate sync
+    const syncInterval = setInterval(pollSync, 3000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        pollSync();
       }
     };
 
@@ -267,10 +312,11 @@ export default function App() {
     window.addEventListener('focus', handleVisibilityChange);
 
     return () => {
+      clearInterval(syncInterval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleVisibilityChange);
     };
-  }, [isLoggedIn]);
+  }, [isLoggedIn, currentUser?.id]);
 
   // Realtime Heartbeat & Auto-Offline Detection
   useEffect(() => {
@@ -286,7 +332,7 @@ export default function App() {
 
     const handleBeforeUnload = () => {
       try {
-        const token = localStorage.getItem('aarvi_token') || '';
+        const token = getAuthToken() || '';
         const blob = new Blob([JSON.stringify({ status: 'offline' })], { type: 'application/json' });
         navigator.sendBeacon('/api/presence', blob);
       } catch (e) {}

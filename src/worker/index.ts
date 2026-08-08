@@ -66,7 +66,6 @@ export interface ServerChat {
 const usersDb: Record<string, ServerUser> = {};
 const chatsDb: Record<string, ServerChat> = {};
 const messagesDb: Record<string, ServerMessage[]> = {};
-const readStatusDb: Record<string, Record<string, string[]>> = {};
 
 const AVATAR_COLORS = [
   '#059669', '#2563eb', '#7c3aed', '#db2777', '#d97706',
@@ -252,18 +251,20 @@ async function getD1UserByUsername(db: any, username: string): Promise<ServerUse
   try {
     const row: any = await db.prepare('SELECT * FROM users WHERE LOWER(username) = ?').bind(username.toLowerCase()).first();
     if (!row) return null;
-    return {
+    const user: ServerUser = {
       id: row.id,
       name: row.name,
       username: row.username,
-      avatar: row.avatar,
+      avatar: row.avatar || generateInitialsAvatarSvg(row.name, row.username),
       bio: row.bio || '',
       publicKey: row.public_key || '',
       pinHash: row.pin_hash || '',
       isVerified: Boolean(row.is_verified),
-      status: 'online',
-      lastSeen: 'Just now',
+      status: (row.status as any) || 'offline',
+      lastSeen: row.last_seen || '',
     };
+    usersDb[user.id] = user;
+    return user;
   } catch {
     return null;
   }
@@ -274,24 +275,124 @@ async function getD1UserById(db: any, id: string): Promise<ServerUser | null> {
   try {
     const row: any = await db.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
     if (!row) return null;
-    return {
+    const user: ServerUser = {
       id: row.id,
       name: row.name,
       username: row.username,
-      avatar: row.avatar,
+      avatar: row.avatar || generateInitialsAvatarSvg(row.name, row.username),
       bio: row.bio || '',
       publicKey: row.public_key || '',
       pinHash: row.pin_hash || '',
       isVerified: Boolean(row.is_verified),
-      status: 'online',
-      lastSeen: 'Just now',
+      status: (row.status as any) || 'offline',
+      lastSeen: row.last_seen || '',
     };
+    usersDb[user.id] = user;
+    return user;
   } catch {
     return null;
   }
 }
 
-async function getD1ChatsForUser(db: any, userId: string): Promise<ServerChat[]> {
+async function getFullUser(db: any, id: string): Promise<ServerUser> {
+  if (usersDb[id] && usersDb[id].name && usersDb[id].username) {
+    return usersDb[id];
+  }
+  if (db) {
+    const d1User = await getD1UserById(db, id);
+    if (d1User) return d1User;
+  }
+  return {
+    id,
+    name: 'User',
+    username: '@user',
+    avatar: generateInitialsAvatarSvg('User', id),
+    status: 'offline',
+    lastSeen: '',
+    publicKey: 'E2EE-KEY-DEFAULT',
+    isVerified: true,
+  };
+}
+
+async function getD1ChatById(db: any, chatId: string): Promise<ServerChat | null> {
+  if (!db) return null;
+  try {
+    const cRow: any = await db.prepare('SELECT * FROM chats WHERE id = ?').bind(chatId).first();
+    if (!cRow) return null;
+
+    const members: any = await db.prepare(
+      'SELECT user_id FROM chat_members WHERE chat_id = ?'
+    ).bind(chatId).all();
+    const memberIds = (members?.results || []).map((m: any) => m.user_id);
+
+    const lastMsgRow: any = await db.prepare(
+      'SELECT * FROM messages WHERE chat_id = ? ORDER BY iso_date DESC LIMIT 1'
+    ).bind(chatId).first();
+
+    let lastMsg: ServerMessage | undefined = undefined;
+    if (lastMsgRow) {
+      lastMsg = {
+        id: lastMsgRow.id,
+        clientMsgId: lastMsgRow.client_msg_id,
+        chatId: lastMsgRow.chat_id,
+        senderId: lastMsgRow.sender_id,
+        senderName: lastMsgRow.sender_name,
+        text: lastMsgRow.text,
+        timestamp: lastMsgRow.timestamp,
+        isoDate: lastMsgRow.iso_date,
+        status: lastMsgRow.status || 'sent',
+        mediaUrl: lastMsgRow.media_url,
+        mediaType: lastMsgRow.media_type,
+        replyToId: lastMsgRow.reply_to_id,
+        replyToText: lastMsgRow.reply_to_text,
+        reactions: lastMsgRow.reactions_json ? JSON.parse(lastMsgRow.reactions_json) : [],
+        isEncrypted: Boolean(lastMsgRow.is_encrypted),
+        isEdited: Boolean(lastMsgRow.is_edited),
+      };
+    }
+
+    const chatObj: ServerChat = {
+      id: cRow.id,
+      name: cRow.name,
+      avatar: cRow.avatar || '',
+      isGroup: Boolean(cRow.is_group),
+      isSecret: Boolean(cRow.is_secret),
+      encryptionFingerprint: cRow.encryption_fingerprint || 'KEY-AARVI-PROT',
+      selfDestructTimer: cRow.self_destruct_timer || 0,
+      memberIds,
+      lastMessage: lastMsg,
+      createdAt: cRow.created_at || new Date().toISOString(),
+    };
+    chatsDb[chatId] = chatObj;
+    return chatObj;
+  } catch (err) {
+    console.error('getD1ChatById error:', err);
+    return null;
+  }
+}
+
+async function findExistingD1Chat(db: any, user1Id: string, user2Id: string, isSecret = false): Promise<ServerChat | null> {
+  if (!db) return null;
+  try {
+    const row: any = await db.prepare(`
+      SELECT c.id FROM chats c
+      JOIN chat_members cm1 ON c.id = cm1.chat_id
+      JOIN chat_members cm2 ON c.id = cm2.chat_id
+      WHERE cm1.user_id = ? AND cm2.user_id = ?
+        AND c.is_group = 0 AND c.is_secret = ?
+      LIMIT 1
+    `).bind(user1Id, user2Id, isSecret ? 1 : 0).first();
+
+    if (row && row.id) {
+      return await getD1ChatById(db, row.id);
+    }
+  } catch (e) {
+    console.error('findExistingD1Chat error:', e);
+  }
+  return null;
+}
+
+async function getD1ChatsForUser(db: any, userId: string): Promise<any[]> {
   if (!db) return [];
   try {
     const memberRows: any = await db.prepare(
@@ -302,57 +403,50 @@ async function getD1ChatsForUser(db: any, userId: string): Promise<ServerChat[]>
       return [];
     }
 
-    const chats: ServerChat[] = [];
+    const responseChats: any[] = [];
     for (const r of memberRows.results) {
       const cId = r.chat_id;
-      const cRow: any = await db.prepare('SELECT * FROM chats WHERE id = ?').bind(cId).first();
-      if (!cRow) continue;
+      const chat = await getD1ChatById(db, cId);
+      if (!chat) continue;
 
-      const members: any = await db.prepare(
-        'SELECT user_id FROM chat_members WHERE chat_id = ?'
-      ).bind(cId).all();
-      const memberIds = (members?.results || []).map((m: any) => m.user_id);
+      const members = await Promise.all(chat.memberIds.map((mId) => getFullUser(db, mId)));
 
-      const lastMsgRow: any = await db.prepare(
-        'SELECT * FROM messages WHERE chat_id = ? ORDER BY iso_date DESC LIMIT 1'
-      ).bind(cId).first();
+      let displayName = chat.name;
+      let displayAvatar = chat.avatar;
 
-      let lastMsg: ServerMessage | undefined = undefined;
-      if (lastMsgRow) {
-        lastMsg = {
-          id: lastMsgRow.id,
-          clientMsgId: lastMsgRow.client_msg_id,
-          chatId: lastMsgRow.chat_id,
-          senderId: lastMsgRow.sender_id,
-          senderName: lastMsgRow.sender_name,
-          text: lastMsgRow.text,
-          timestamp: lastMsgRow.timestamp,
-          isoDate: lastMsgRow.iso_date,
-          status: lastMsgRow.status || 'sent',
-          mediaUrl: lastMsgRow.media_url,
-          mediaType: lastMsgRow.media_type,
-          replyToId: lastMsgRow.reply_to_id,
-          replyToText: lastMsgRow.reply_to_text,
-          reactions: lastMsgRow.reactions_json ? JSON.parse(lastMsgRow.reactions_json) : [],
-          isEncrypted: Boolean(lastMsgRow.is_encrypted),
-          isEdited: Boolean(lastMsgRow.is_edited),
-        };
+      if (!chat.isGroup && !chat.isSecret) {
+        const otherUser = members.find((m) => m.id !== userId);
+        if (otherUser) {
+          displayName = otherUser.name;
+          displayAvatar = otherUser.avatar || generateInitialsAvatarSvg(otherUser.name, otherUser.username);
+        }
+      } else if (chat.isSecret) {
+        const otherUser = members.find((m) => m.id !== userId);
+        if (otherUser) {
+          displayName = `🔒 Secret Vault (${otherUser.name})`;
+          displayAvatar = otherUser.avatar;
+        }
       }
 
-      chats.push({
-        id: cRow.id,
-        name: cRow.name,
-        avatar: cRow.avatar || '',
-        isGroup: Boolean(cRow.is_group),
-        isSecret: Boolean(cRow.is_secret),
-        encryptionFingerprint: cRow.encryption_fingerprint || '',
-        selfDestructTimer: cRow.self_destruct_timer || 0,
-        memberIds,
-        lastMessage: lastMsg,
-        createdAt: cRow.created_at || new Date().toISOString(),
+      let unreadCount = 0;
+      try {
+        const unreadRow: any = await db.prepare(
+          `SELECT COUNT(*) as cnt FROM messages WHERE chat_id = ? AND sender_id != ? AND status != 'read'`
+        ).bind(cId, userId).first();
+        if (unreadRow) unreadCount = Number(unreadRow.cnt || 0);
+      } catch {}
+
+      responseChats.push({
+        ...chat,
+        name: displayName,
+        avatar: displayAvatar,
+        members,
+        unreadCount,
+        pinned: false,
       });
     }
-    return chats;
+
+    return responseChats;
   } catch (err) {
     console.error('getD1ChatsForUser error:', err);
     return [];
@@ -368,7 +462,7 @@ async function getD1MessagesForChat(db: any, chatId: string): Promise<ServerMess
 
     if (!rows || !rows.results) return [];
 
-    return rows.results.map((m: any) => ({
+    const msgs = rows.results.map((m: any) => ({
       id: m.id,
       clientMsgId: m.client_msg_id,
       chatId: m.chat_id,
@@ -386,6 +480,8 @@ async function getD1MessagesForChat(db: any, chatId: string): Promise<ServerMess
       isEncrypted: Boolean(m.is_encrypted),
       isEdited: Boolean(m.is_edited),
     }));
+    messagesDb[chatId] = msgs;
+    return msgs;
   } catch (err) {
     console.error('getD1MessagesForChat error:', err);
     return [];
@@ -394,84 +490,76 @@ async function getD1MessagesForChat(db: any, chatId: string): Promise<ServerMess
 
 async function saveD1User(db: any, user: ServerUser) {
   if (!db) return;
-  try {
-    await db.prepare(
-      `INSERT INTO users (id, name, username, avatar, bio, public_key, pin_hash, is_verified)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-       ON CONFLICT(id) DO UPDATE SET
-       name = excluded.name,
-       avatar = excluded.avatar,
-       bio = excluded.bio,
-       pin_hash = excluded.pin_hash`
-    ).bind(
-      user.id,
-      user.name,
-      user.username,
-      user.avatar || '',
-      user.bio || '',
-      user.publicKey || '',
-      user.pinHash || ''
-    ).run();
-  } catch (err) {
-    console.error('saveD1User error:', err);
-  }
+  await db.prepare(
+    `INSERT INTO users (id, name, username, avatar, bio, public_key, pin_hash, status, last_seen, is_verified)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+     ON CONFLICT(id) DO UPDATE SET
+     name = excluded.name,
+     avatar = excluded.avatar,
+     bio = excluded.bio,
+     pin_hash = excluded.pin_hash,
+     status = excluded.status,
+     last_seen = excluded.last_seen`
+  ).bind(
+    user.id,
+    user.name,
+    user.username,
+    user.avatar || '',
+    user.bio || '',
+    user.publicKey || '',
+    user.pinHash || '',
+    user.status || 'offline',
+    user.lastSeen || new Date().toISOString()
+  ).run();
 }
 
 async function saveD1Chat(db: any, chat: ServerChat) {
   if (!db) return;
-  try {
-    await db.prepare(
-      `INSERT INTO chats (id, name, avatar, is_group, is_secret, encryption_fingerprint, self_destruct_timer)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET name = excluded.name`
-    ).bind(
-      chat.id,
-      chat.name,
-      chat.avatar || '',
-      chat.isGroup ? 1 : 0,
-      chat.isSecret ? 1 : 0,
-      chat.encryptionFingerprint || '',
-      chat.selfDestructTimer || 0
-    ).run();
+  await db.prepare(
+    `INSERT INTO chats (id, name, avatar, is_group, is_secret, encryption_fingerprint, self_destruct_timer)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name`
+  ).bind(
+    chat.id,
+    chat.name,
+    chat.avatar || '',
+    chat.isGroup ? 1 : 0,
+    chat.isSecret ? 1 : 0,
+    chat.encryptionFingerprint || '',
+    chat.selfDestructTimer || 0
+  ).run();
 
-    for (const memberId of chat.memberIds || []) {
-      await db.prepare(
-        `INSERT INTO chat_members (chat_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING`
-      ).bind(chat.id, memberId).run();
-    }
-  } catch (err) {
-    console.error('saveD1Chat error:', err);
+  for (const memberId of chat.memberIds || []) {
+    await db.prepare(
+      `INSERT INTO chat_members (chat_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING`
+    ).bind(chat.id, memberId).run();
   }
 }
 
 async function saveD1Message(db: any, msg: ServerMessage) {
   if (!db) return;
-  try {
-    await db.prepare(
-      `INSERT INTO messages (id, client_msg_id, chat_id, sender_id, sender_name, text, timestamp, iso_date, status, media_url, media_type, reply_to_id, reply_to_text, reactions_json, is_encrypted, is_edited)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET text = excluded.text, reactions_json = excluded.reactions_json, is_edited = excluded.is_edited`
-    ).bind(
-      msg.id,
-      msg.clientMsgId || null,
-      msg.chatId,
-      msg.senderId,
-      msg.senderName,
-      msg.text,
-      msg.timestamp,
-      msg.isoDate,
-      msg.status || 'sent',
-      msg.mediaUrl || null,
-      msg.mediaType || null,
-      msg.replyToId || null,
-      msg.replyToText || null,
-      msg.reactions ? JSON.stringify(msg.reactions) : null,
-      msg.isEncrypted ? 1 : 0,
-      msg.isEdited ? 1 : 0
-    ).run();
-  } catch (err) {
-    console.error('saveD1Message error:', err);
-  }
+  await db.prepare(
+    `INSERT INTO messages (id, client_msg_id, chat_id, sender_id, sender_name, text, timestamp, iso_date, status, media_url, media_type, reply_to_id, reply_to_text, reactions_json, is_encrypted, is_edited)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET text = excluded.text, reactions_json = excluded.reactions_json, is_edited = excluded.is_edited, status = excluded.status`
+  ).bind(
+    msg.id,
+    msg.clientMsgId || null,
+    msg.chatId,
+    msg.senderId,
+    msg.senderName,
+    msg.text,
+    msg.timestamp,
+    msg.isoDate,
+    msg.status || 'sent',
+    msg.mediaUrl || null,
+    msg.mediaType || null,
+    msg.replyToId || null,
+    msg.replyToText || null,
+    msg.reactions ? JSON.stringify(msg.reactions) : null,
+    msg.isEncrypted ? 1 : 0,
+    msg.isEdited ? 1 : 0
+  ).run();
 }
 
 export default {
@@ -542,7 +630,7 @@ export default {
           // Check if user exists in D1 or memory
           let existingUser = Object.values(usersDb).find((u) => u.username.toLowerCase() === cleanUsername);
           if (!existingUser && env.DB) {
-            existingUser = await getD1UserByUsername(env.DB, cleanUsername) as any;
+            existingUser = (await getD1UserByUsername(env.DB, cleanUsername)) || undefined;
           }
 
           if (existingUser) {
@@ -620,7 +708,10 @@ export default {
           }
 
           user.status = 'online';
-          user.lastSeen = 'Just now';
+          user.lastSeen = new Date().toISOString();
+          if (env.DB) {
+            await saveD1User(env.DB, user);
+          }
 
           const token = await signJWT({ id: user.id, username: user.username, name: user.name }, jwtSecret);
 
@@ -640,28 +731,7 @@ export default {
         if (!decodedUser) {
           return jsonResponse({ error: 'Unauthorized: Invalid or missing token' }, 401);
         }
-        let user = usersDb[decodedUser.id];
-        if (!user && env.DB) {
-          user = (await getD1UserById(env.DB, decodedUser.id)) || undefined;
-          if (user) usersDb[user.id] = user;
-        }
-
-        if (!user) {
-          const userName = decodedUser.name || 'User';
-          const userUname = decodedUser.username || '@user';
-          user = {
-            id: decodedUser.id,
-            name: userName,
-            username: userUname,
-            avatar: generateInitialsAvatarSvg(userName, userUname),
-            publicKey: 'E2EE-KEY-DEFAULT',
-            status: 'online',
-            lastSeen: new Date().toISOString(),
-            isVerified: true,
-          };
-          usersDb[user.id] = user;
-        }
-
+        let user = await getFullUser(env.DB, decodedUser.id);
         return jsonResponse({ user, status: 'authenticated' });
       }
 
@@ -673,34 +743,41 @@ export default {
         const query = (url.searchParams.get('q') || '').toLowerCase().trim();
         const currentUserId = decodedUser.id;
 
-        let matches = Object.values(usersDb)
-          .filter((u) => u.id !== currentUserId)
-          .filter((u) => {
-            if (!query) return true;
-            return u.name.toLowerCase().includes(query) || u.username.toLowerCase().includes(query);
-          });
-
-        if (matches.length === 0 && env.DB) {
+        let matches: ServerUser[] = [];
+        if (env.DB) {
           try {
-            const rows: any = await env.DB.prepare(
-              'SELECT * FROM users WHERE id != ? LIMIT 20'
-            ).bind(currentUserId).all();
+            let sql = 'SELECT * FROM users WHERE id != ?';
+            const params: any[] = [currentUserId];
+            if (query) {
+              sql += ' AND (LOWER(name) LIKE ? OR LOWER(username) LIKE ?)';
+              params.push(`%${query}%`, `%${query}%`);
+            }
+            sql += ' LIMIT 50';
+
+            const rows: any = await env.DB.prepare(sql).bind(...params).all();
             if (rows && rows.results) {
               matches = rows.results.map((r: any) => ({
                 id: r.id,
                 name: r.name,
                 username: r.username,
-                avatar: r.avatar,
+                avatar: r.avatar || generateInitialsAvatarSvg(r.name, r.username),
                 bio: r.bio || '',
                 publicKey: r.public_key || '',
                 isVerified: Boolean(r.is_verified),
-                status: 'online',
-                lastSeen: 'Just now',
+                status: (r.status as any) || 'offline',
+                lastSeen: r.last_seen || '',
               }));
             }
-          } catch {
-            // ignore
+          } catch (e) {
+            console.error('User search D1 query error:', e);
           }
+        } else {
+          matches = Object.values(usersDb)
+            .filter((u) => u.id !== currentUserId)
+            .filter((u) => {
+              if (!query) return true;
+              return u.name.toLowerCase().includes(query) || u.username.toLowerCase().includes(query);
+            });
         }
 
         return jsonResponse({ users: matches });
@@ -713,52 +790,34 @@ export default {
         }
         const currentUserId = decodedUser.id;
 
-        let userChats = Object.values(chatsDb).filter((c) => c.memberIds.includes(currentUserId));
-        if (userChats.length === 0 && env.DB) {
-          const d1Chats = await getD1ChatsForUser(env.DB, currentUserId);
-          d1Chats.forEach((c) => {
-            chatsDb[c.id] = c;
+        let responseChats: any[] = [];
+        if (env.DB) {
+          responseChats = await getD1ChatsForUser(env.DB, currentUserId);
+        } else {
+          const userChats = Object.values(chatsDb).filter((c) => c.memberIds.includes(currentUserId));
+          responseChats = userChats.map((c) => {
+            const members = c.memberIds.map((id) => usersDb[id] || { id, name: 'User', username: '@user', avatar: '' });
+            const chatMsgs = messagesDb[c.id] || [];
+            const unreadCount = chatMsgs.filter((m) => m.senderId !== currentUserId && m.status !== 'read').length;
+
+            let displayName = c.name;
+            let displayAvatar = c.avatar;
+            if (!c.isGroup && !c.isSecret) {
+              const otherUser = members.find((m) => m.id !== currentUserId);
+              if (otherUser) {
+                displayName = otherUser.name;
+                displayAvatar = otherUser.avatar || c.avatar;
+              }
+            }
+            return {
+              ...c,
+              name: displayName,
+              avatar: displayAvatar,
+              members,
+              unreadCount,
+            };
           });
-          userChats = d1Chats;
         }
-
-        const responseChats = userChats.map((c) => {
-          const members = c.memberIds.map((id) => usersDb[id] || { id, name: 'User', username: '@user', avatar: '' });
-          const chatMsgs = messagesDb[c.id] || [];
-          const userReadIds = (readStatusDb[c.id] && readStatusDb[c.id][currentUserId]) || [];
-          const unreadCount = chatMsgs.filter(
-            (m) => m.senderId !== currentUserId && !userReadIds.includes(m.id) && m.status !== 'read'
-          ).length;
-
-          let displayName = c.name;
-          let displayAvatar = c.avatar;
-          if (!c.isGroup && !c.isSecret) {
-            const otherUser = members.find((m) => m.id !== currentUserId);
-            if (otherUser) {
-              displayName = otherUser.name;
-              displayAvatar = otherUser.avatar || c.avatar;
-            }
-          } else if (c.isSecret) {
-            const otherUser = members.find((m) => m.id !== currentUserId);
-            if (otherUser) {
-              displayName = `🔒 Secret Vault (${otherUser.name})`;
-            }
-          }
-
-          return {
-            id: c.id,
-            name: displayName,
-            avatar: displayAvatar,
-            isGroup: c.isGroup,
-            isSecret: c.isSecret,
-            unreadCount,
-            pinned: false,
-            encryptionFingerprint: c.encryptionFingerprint,
-            selfDestructTimer: c.selfDestructTimer,
-            members,
-            lastMessage: c.lastMessage,
-          };
-        });
 
         return jsonResponse({ chats: responseChats });
       }
@@ -773,15 +832,31 @@ export default {
         const { recipientUserId, name, isGroup, isSecret, selfDestructTimer } = body;
 
         if (!isGroup && recipientUserId) {
-          const existingChat = Object.values(chatsDb).find(
-            (c) => !c.isGroup && Boolean(c.isSecret) === Boolean(isSecret) && c.memberIds.includes(currentUserId) && c.memberIds.includes(recipientUserId)
-          );
+          // Check for existing chat in D1 first
+          const existingChat = env.DB
+            ? await findExistingD1Chat(env.DB, currentUserId, recipientUserId, Boolean(isSecret))
+            : Object.values(chatsDb).find(
+                (c) => !c.isGroup && Boolean(c.isSecret) === Boolean(isSecret) && c.memberIds.includes(currentUserId) && c.memberIds.includes(recipientUserId)
+              );
 
           if (existingChat) {
-            const members = existingChat.memberIds.map((id) => usersDb[id] || { id, name: 'User', username: '@user', avatar: '' });
+            const members = await Promise.all(existingChat.memberIds.map((mId) => getFullUser(env.DB, mId)));
+            let displayName = existingChat.name;
+            let displayAvatar = existingChat.avatar;
+
+            if (!existingChat.isGroup && !existingChat.isSecret) {
+              const otherUser = members.find((m) => m.id !== currentUserId);
+              if (otherUser) {
+                displayName = otherUser.name;
+                displayAvatar = otherUser.avatar;
+              }
+            }
+
             return jsonResponse({
               chat: {
                 ...existingChat,
+                name: displayName,
+                avatar: displayAvatar,
                 members,
                 unreadCount: 0,
               },
@@ -792,9 +867,9 @@ export default {
         const memberIds = Array.from(new Set([currentUserId, ...(recipientUserId ? [recipientUserId] : [])]));
         const chatId = `chat-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-        let recipientUser = recipientUserId ? usersDb[recipientUserId] : null;
-        if (!recipientUser && recipientUserId && env.DB) {
-          recipientUser = (await getD1UserById(env.DB, recipientUserId)) || null;
+        let recipientUser: ServerUser | null = null;
+        if (recipientUserId) {
+          recipientUser = await getFullUser(env.DB, recipientUserId);
         }
 
         const defaultName = isSecret
@@ -806,9 +881,7 @@ export default {
         const newChat: ServerChat = {
           id: chatId,
           name: defaultName,
-          avatar: recipientUser
-            ? recipientUser.avatar
-            : generateInitialsAvatarSvg(defaultName, chatId),
+          avatar: recipientUser ? recipientUser.avatar : generateInitialsAvatarSvg(defaultName, chatId),
           isGroup: Boolean(isGroup),
           isSecret: Boolean(isSecret),
           encryptionFingerprint: `KEY-${Math.floor(Math.random() * 8999 + 1000)}-AARVI-PROT`,
@@ -824,7 +897,7 @@ export default {
           await saveD1Chat(env.DB, newChat);
         }
 
-        const members = memberIds.map((id) => usersDb[id] || { id, name: 'User', username: '@user', avatar: '' });
+        const members = await Promise.all(memberIds.map((mId) => getFullUser(env.DB, mId)));
         const resChat = { ...newChat, members, unreadCount: 0 };
 
         broadcastEvent('chat:new', { chat: resChat });
@@ -838,12 +911,13 @@ export default {
           return jsonResponse({ error: 'Unauthorized' }, 401);
         }
         const chatId = pathname.split('/')[3];
-        let msgs = messagesDb[chatId];
-        if ((!msgs || msgs.length === 0) && env.DB) {
+        let msgs: ServerMessage[] = [];
+        if (env.DB) {
           msgs = await getD1MessagesForChat(env.DB, chatId);
-          messagesDb[chatId] = msgs;
+        } else {
+          msgs = messagesDb[chatId] || [];
         }
-        return jsonResponse({ chatId, messages: msgs || [] });
+        return jsonResponse({ chatId, messages: msgs });
       }
 
       // 9. Send Message (/api/messages, /api/messages/send, /api/messages/reply)
@@ -859,46 +933,35 @@ export default {
           return jsonResponse({ error: 'chatId and text are required' }, 400);
         }
 
-        let chat = chatsDb[chatId];
+        let chat = env.DB ? await getD1ChatById(env.DB, chatId) : chatsDb[chatId];
         if (!chat) {
-          chat = {
-            id: chatId,
-            name: 'Conversation',
-            avatar: '',
-            isGroup: false,
-            isSecret: false,
-            encryptionFingerprint: 'KEY-DEFAULT',
-            selfDestructTimer: 0,
-            memberIds: [currentUserId],
-            createdAt: new Date().toISOString(),
-          };
-          chatsDb[chatId] = chat;
+          return jsonResponse({ error: 'Conversation not found' }, 404);
         }
 
-        if (clientMsgId) {
-          const existing = (messagesDb[chatId] || []).find((m) => m.clientMsgId === clientMsgId);
-          if (existing) {
-            return jsonResponse({ success: true, message: existing, duplicate: true });
-          }
+        if (clientMsgId && env.DB) {
+          try {
+            const existingRow: any = await env.DB.prepare(
+              'SELECT * FROM messages WHERE client_msg_id = ?'
+            ).bind(clientMsgId).first();
+            if (existingRow) {
+              return jsonResponse({ success: true, duplicate: true, message: { id: existingRow.id, text: existingRow.text } });
+            }
+          } catch {}
         }
 
-        const senderUser = usersDb[currentUserId];
+        const senderUser = await getFullUser(env.DB, currentUserId);
         const msgId = `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-
-        const otherMembers = (chat.memberIds || []).filter((id) => id !== currentUserId);
-        const recipientOnline = otherMembers.some((id) => usersDb[id]?.status === 'online');
-        const initialStatus: 'sent' | 'delivered' = recipientOnline ? 'delivered' : 'sent';
 
         const newMsg: ServerMessage = {
           id: msgId,
           clientMsgId,
           chatId,
           senderId: currentUserId,
-          senderName: senderUser ? senderUser.name : (decodedUser.name || 'AARVI User'),
+          senderName: senderUser.name,
           text,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           isoDate: new Date().toISOString(),
-          status: initialStatus,
+          status: 'sent',
           mediaType,
           mediaUrl,
           replyToId,
@@ -906,9 +969,7 @@ export default {
           isEncrypted: true,
         };
 
-        if (!messagesDb[chatId]) {
-          messagesDb[chatId] = [];
-        }
+        if (!messagesDb[chatId]) messagesDb[chatId] = [];
         messagesDb[chatId].push(newMsg);
         chat.lastMessage = newMsg;
 
@@ -918,9 +979,6 @@ export default {
         }
 
         broadcastEvent('message:new', { message: newMsg, chatId });
-        if (initialStatus === 'delivered') {
-          broadcastEvent('message:delivered', { chatId, deliveredMessageIds: [msgId] });
-        }
 
         return jsonResponse({ success: true, message: newMsg, ackTimestamp: new Date().toISOString() }, 201);
       }
@@ -936,32 +994,22 @@ export default {
           return jsonResponse({ error: 'messageId and text are required' }, 400);
         }
 
-        let foundMsg: ServerMessage | null = null;
-        let targetChatId: string | null = null;
-
-        for (const [cId, msgs] of Object.entries(messagesDb)) {
-          const m = msgs.find((item) => item.id === messageId);
-          if (m) {
-            foundMsg = m;
-            targetChatId = cId;
-            break;
+        if (env.DB) {
+          try {
+            const msgRow: any = await env.DB.prepare('SELECT * FROM messages WHERE id = ?').bind(messageId).first();
+            if (!msgRow) return jsonResponse({ error: 'Message not found' }, 404);
+            if (msgRow.sender_id !== decodedUser.id) {
+              return jsonResponse({ error: 'Cannot edit message from another user' }, 403);
+            }
+            await env.DB.prepare('UPDATE messages SET text = ?, is_edited = 1 WHERE id = ?').bind(text, messageId).run();
+            broadcastEvent('message:edit', { chatId: msgRow.chat_id, messageId, text, isEdited: true });
+            return jsonResponse({ success: true, messageId, text });
+          } catch (e: any) {
+            return jsonResponse({ error: e?.message || 'Edit failed' }, 500);
           }
         }
 
-        if (!foundMsg || !targetChatId) {
-          return jsonResponse({ error: 'Message not found' }, 404);
-        }
-
-        foundMsg.text = text;
-        foundMsg.isEdited = true;
-
-        if (env.DB) {
-          await saveD1Message(env.DB, foundMsg);
-        }
-
-        broadcastEvent('message:edit', { chatId: targetChatId, messageId, text, isEdited: true });
-
-        return jsonResponse({ success: true, message: foundMsg });
+        return jsonResponse({ success: true });
       }
 
       // 11. Delete Message (/api/messages/:id/delete or /api/messages/delete)
@@ -975,20 +1023,16 @@ export default {
           return jsonResponse({ error: 'messageId is required' }, 400);
         }
 
-        let targetChatId: string | null = null;
-        for (const [cId, msgs] of Object.entries(messagesDb)) {
-          const idx = msgs.findIndex((item) => item.id === messageId);
-          if (idx !== -1) {
-            targetChatId = cId;
-            if (deleteForEveryone) {
-              msgs.splice(idx, 1);
+        if (env.DB) {
+          try {
+            const msgRow: any = await env.DB.prepare('SELECT * FROM messages WHERE id = ?').bind(messageId).first();
+            if (msgRow && deleteForEveryone) {
+              await env.DB.prepare('DELETE FROM messages WHERE id = ?').bind(messageId).run();
+              broadcastEvent('message:delete', { chatId: msgRow.chat_id, messageId, deleteForEveryone: true });
             }
-            break;
+          } catch (e: any) {
+            return jsonResponse({ error: e?.message || 'Delete failed' }, 500);
           }
-        }
-
-        if (targetChatId) {
-          broadcastEvent('message:delete', { chatId: targetChatId, messageId, deleteForEveryone: Boolean(deleteForEveryone) });
         }
 
         return jsonResponse({ success: true, messageId, deleteForEveryone: Boolean(deleteForEveryone) });
@@ -1005,45 +1049,37 @@ export default {
           return jsonResponse({ error: 'messageId and emoji are required' }, 400);
         }
 
-        let foundMsg: ServerMessage | null = null;
-        let targetChatId: string | null = null;
-        for (const [cId, msgs] of Object.entries(messagesDb)) {
-          const m = msgs.find((item) => item.id === messageId);
-          if (m) {
-            foundMsg = m;
-            targetChatId = cId;
-            break;
-          }
-        }
-
-        if (!foundMsg) {
-          return jsonResponse({ error: 'Message not found' }, 404);
-        }
-
-        if (!foundMsg.reactions) foundMsg.reactions = [];
-        let rObj = foundMsg.reactions.find((r) => r.emoji === emoji);
-        if (rObj) {
-          if (rObj.users.includes(decodedUser.id)) {
-            rObj.users = rObj.users.filter((u) => u !== decodedUser.id);
-          } else {
-            rObj.users.push(decodedUser.id);
-          }
-          rObj.count = rObj.users.length;
-        } else {
-          rObj = { emoji, count: 1, users: [decodedUser.id] };
-          foundMsg.reactions.push(rObj);
-        }
-        foundMsg.reactions = foundMsg.reactions.filter((r) => r.count > 0);
-
         if (env.DB) {
-          await saveD1Message(env.DB, foundMsg);
+          try {
+            const msgRow: any = await env.DB.prepare('SELECT * FROM messages WHERE id = ?').bind(messageId).first();
+            if (!msgRow) return jsonResponse({ error: 'Message not found' }, 404);
+
+            let reactions: ServerReaction[] = msgRow.reactions_json ? JSON.parse(msgRow.reactions_json) : [];
+            let rObj = reactions.find((r) => r.emoji === emoji);
+            if (rObj) {
+              if (rObj.users.includes(decodedUser.id)) {
+                rObj.users = rObj.users.filter((u) => u !== decodedUser.id);
+              } else {
+                rObj.users.push(decodedUser.id);
+              }
+              rObj.count = rObj.users.length;
+            } else {
+              rObj = { emoji, count: 1, users: [decodedUser.id] };
+              reactions.push(rObj);
+            }
+            reactions = reactions.filter((r) => r.count > 0);
+
+            await env.DB.prepare('UPDATE messages SET reactions_json = ? WHERE id = ?')
+              .bind(JSON.stringify(reactions), messageId).run();
+
+            broadcastEvent('message:react', { chatId: msgRow.chat_id, messageId, reactions });
+            return jsonResponse({ success: true, reactions });
+          } catch (e: any) {
+            return jsonResponse({ error: e?.message || 'Reaction failed' }, 500);
+          }
         }
 
-        if (targetChatId) {
-          broadcastEvent('message:react', { chatId: targetChatId, messageId, reactions: foundMsg.reactions });
-        }
-
-        return jsonResponse({ success: true, reactions: foundMsg.reactions });
+        return jsonResponse({ success: true, reactions: [] });
       }
 
       // 13. Pin Message
@@ -1053,8 +1089,7 @@ export default {
         const chatId = pathname.includes('/pin-message') && !pathname.endsWith('/pin-message') ? pathname.split('/')[3] : body.chatId;
         const messageId = body.messageId;
 
-        if (chatId && chatsDb[chatId]) {
-          chatsDb[chatId].pinnedMessageId = messageId || undefined;
+        if (chatId) {
           broadcastEvent('chat:pin_message', { chatId, pinnedMessageId: messageId });
         }
 
@@ -1067,19 +1102,7 @@ export default {
         const chatId = pathname.split('/')[3];
         const currentUserId = decodedUser.id;
 
-        const msgs = messagesDb[chatId] || [];
-        const newlyReadIds: string[] = [];
-
-        for (const m of msgs) {
-          if (m.senderId !== currentUserId) {
-            if (m.status !== 'read') {
-              m.status = 'read';
-              newlyReadIds.push(m.id);
-            }
-          }
-        }
-
-        if (env.DB && newlyReadIds.length > 0) {
+        if (env.DB) {
           try {
             await env.DB.prepare(
               `UPDATE messages SET status = 'read' WHERE chat_id = ? AND sender_id != ?`
@@ -1089,66 +1112,60 @@ export default {
           }
         }
 
-        const chat = chatsDb[chatId];
-        if (chat && chat.lastMessage && chat.lastMessage.senderId !== currentUserId) {
-          chat.lastMessage.status = 'read';
-        }
-
-        broadcastEvent('message:read', { chatId, userId: currentUserId, readMessageIds: newlyReadIds });
-        return jsonResponse({ success: true, readCount: newlyReadIds.length });
+        broadcastEvent('message:read', { chatId, userId: currentUserId });
+        return jsonResponse({ success: true });
       }
 
-      // 15. Typing Status
+      // 15. Typing Indicator
       if (pathname.match(/^\/api\/chats\/[^/]+\/typing$/) && request.method === 'POST') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         const chatId = pathname.split('/')[3];
         const body: any = await request.json().catch(() => ({}));
-        broadcastEvent('typing:change', { chatId, userId: decodedUser.id, isTyping: Boolean(body.isTyping) });
+        const { isTyping } = body;
+
+        broadcastEvent('typing:change', { chatId, userId: decodedUser.id, isTyping: Boolean(isTyping) });
         return jsonResponse({ success: true });
       }
 
-      // 16. Presence Status
-      if ((pathname === '/api/presence' || pathname === '/api/users/presence') && request.method === 'POST') {
+      // 16. Presence Status Update
+      if (pathname === '/api/presence' && request.method === 'POST') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         const body: any = await request.json().catch(() => ({}));
-        const status = body.status === 'offline' ? 'offline' : 'online';
-        const nowIso = new Date().toISOString();
-
-        if (usersDb[decodedUser.id]) {
-          usersDb[decodedUser.id].status = status;
-          usersDb[decodedUser.id].lastSeen = nowIso;
-        }
+        const { status } = body;
+        const currentUserId = decodedUser.id;
+        const newStatus = status || 'online';
+        const lastSeen = new Date().toISOString();
 
         if (env.DB) {
           try {
             await env.DB.prepare(
-              `UPDATE users SET status = ?, last_seen = ?, last_active_timestamp = ? WHERE id = ?`
-            ).bind(status, nowIso, Date.now(), decodedUser.id).run();
-          } catch (e) {}
+              'UPDATE users SET status = ?, last_seen = ? WHERE id = ?'
+            ).bind(newStatus, lastSeen, currentUserId).run();
+          } catch {}
         }
 
-        broadcastEvent('presence:change', { userId: decodedUser.id, status, lastSeen: nowIso });
-        return jsonResponse({ success: true, status, lastSeen: nowIso });
+        broadcastEvent('presence:change', { userId: currentUserId, status: newStatus, lastSeen });
+        return jsonResponse({ success: true, status: newStatus });
       }
 
       // 17. Full Sync
       if (pathname === '/api/sync' && request.method === 'GET') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         const currentUserId = decodedUser.id;
-        let userChats = Object.values(chatsDb).filter((c) => c.memberIds.includes(currentUserId));
 
-        if (userChats.length === 0 && env.DB) {
-          userChats = await getD1ChatsForUser(env.DB, currentUserId);
-        }
-
+        let userChats: any[] = [];
         const userMessagesMap: Record<string, ServerMessage[]> = {};
-        for (const c of userChats) {
-          let msgs = messagesDb[c.id];
-          if ((!msgs || msgs.length === 0) && env.DB) {
-            msgs = await getD1MessagesForChat(env.DB, c.id);
-            messagesDb[c.id] = msgs;
+
+        if (env.DB) {
+          userChats = await getD1ChatsForUser(env.DB, currentUserId);
+          for (const c of userChats) {
+            userMessagesMap[c.id] = await getD1MessagesForChat(env.DB, c.id);
           }
-          userMessagesMap[c.id] = msgs || [];
+        } else {
+          userChats = Object.values(chatsDb).filter((c) => c.memberIds.includes(currentUserId));
+          for (const c of userChats) {
+            userMessagesMap[c.id] = messagesDb[c.id] || [];
+          }
         }
 
         return jsonResponse({
@@ -1158,15 +1175,17 @@ export default {
         });
       }
 
-      // 18. Media Upload
+      // 18. Media Upload Stub
       if (pathname === '/api/upload' && request.method === 'POST') {
-        const body: any = await request.json().catch(() => ({}));
-        const { dataUrl } = body;
-        const sampleUrl = dataUrl || 'https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=800&q=80';
-        return jsonResponse({ success: true, publicUrl: sampleUrl });
+        if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        return jsonResponse({
+          success: true,
+          url: `https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80`,
+          type: 'image',
+        });
       }
 
-      // 19. Realtime Stream (SSE)
+      // 19. Realtime SSE Event Stream
       if (pathname === '/api/realtime' || pathname === '/api/realtime/stream') {
         const { readable, writable } = new TransformStream();
         const writer = writable.getWriter();
@@ -1174,6 +1193,7 @@ export default {
 
         activeStreams.push({ writer, encoder });
 
+        // Send initial connection event
         writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() })}\n\n`));
 
         return new Response(readable, {
@@ -1185,13 +1205,15 @@ export default {
           },
         });
       }
+
+      return jsonResponse({ error: 'Endpoint not found' }, 404);
     }
 
-    // Static Assets Fallback
+    // Serve Static Frontend Assets in Production Worker
     if (env.ASSETS) {
       return env.ASSETS.fetch(request);
     }
 
-    return new Response('AARVI Worker Active', { status: 200 });
+    return new Response('AARVI Cloudflare Worker Active', { status: 200 });
   },
 };
