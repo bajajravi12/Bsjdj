@@ -115,6 +115,7 @@ export default function App() {
                   ...c,
                   lastMessage: message,
                   isTyping: false,
+                  typingUserName: undefined,
                   unreadCount: isCurrentActive || message.senderId === currentUser.id
                     ? (c.unreadCount || 0)
                     : (c.unreadCount || 0) + 1,
@@ -204,11 +205,26 @@ export default function App() {
             (prev || []).map((c) => (c.id === chatId ? { ...c, pinnedMessageId } : c))
           );
         } else if (type === 'typing:change') {
-          const { chatId, userId, isTyping } = data;
+          const { chatId, userId, userName, isTyping } = data;
           if (userId !== currentUser.id) {
             setChats((prev) =>
-              (prev || []).map((c) => (c.id === chatId ? { ...c, isTyping } : c))
+              (prev || []).map((c) =>
+                c.id === chatId
+                  ? { ...c, isTyping: Boolean(isTyping), typingUserName: isTyping ? (userName || 'Someone') : undefined }
+                  : c
+              )
             );
+
+            // Auto clear typing state after 4 seconds if no new typing event or message arrives
+            if (isTyping) {
+              setTimeout(() => {
+                setChats((prev) =>
+                  (prev || []).map((c) =>
+                    c.id === chatId && c.isTyping ? { ...c, isTyping: false, typingUserName: undefined } : c
+                  )
+                );
+              }, 4000);
+            }
           }
         } else if (type === 'chat:new') {
           const { chat } = data;

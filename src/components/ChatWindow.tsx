@@ -3,6 +3,7 @@ import { Chat, Message, User } from '../types';
 import { apiSetTyping, apiMarkRead } from '../services/api';
 import { getDisplayAvatar } from '../utils/avatar';
 import { formatLastSeen } from '../utils/presence';
+import { formatMessageTime } from '../utils/date';
 import { 
   Lock, 
   Paperclip, 
@@ -21,6 +22,7 @@ import {
   Pause, 
   Flame, 
   ArrowLeft,
+  ArrowDown,
   Pin,
   Share2,
   Copy,
@@ -92,9 +94,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   // Toast feedback
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
+  // Scroll & Auto-Scroll State
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [showNewMessageBanner, setShowNewMessageBanner] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const recordingTimerRef = useRef<any>(null);
   const typingTimerRef = useRef<any>(null);
+  const isTypingActiveRef = useRef<boolean>(false);
   const longPressTimerRef = useRef<any>(null);
 
   const showToast = (msg: string) => {
@@ -102,10 +110,35 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     setTimeout(() => setToastMsg(null), 2500);
   };
 
-  // Auto scroll to bottom
+  const scrollToBottom = (smooth = true) => {
+    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
+    setShowNewMessageBanner(false);
+    setIsNearBottom(true);
+  };
+
+  const handleScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const near = distanceFromBottom <= 120;
+    setIsNearBottom(near);
+    if (near) {
+      setShowNewMessageBanner(false);
+    }
+  };
+
+  // Smart Auto scroll to bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, chat.id]);
+    if (!messages || messages.length === 0) return;
+    const lastMsg = messages[messages.length - 1];
+    const isSelf = lastMsg?.senderId === currentUser.id;
+
+    if (isSelf || isNearBottom) {
+      scrollToBottom(true);
+    } else {
+      setShowNewMessageBanner(true);
+    }
+  }, [messages, chat.id, currentUser.id]);
 
   // Read Receipts Trigger
   useEffect(() => {
@@ -124,19 +157,24 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     };
   }, [chat.id, (messages || []).length]);
 
-  // Handle Input Typing
+  // Handle Input Typing with Debounce
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setInputText(val);
 
     if (val.trim()) {
-      apiSetTyping(chat.id, true).catch(() => {});
+      if (!isTypingActiveRef.current) {
+        isTypingActiveRef.current = true;
+        apiSetTyping(chat.id, true).catch(() => {});
+      }
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       typingTimerRef.current = setTimeout(() => {
+        isTypingActiveRef.current = false;
         apiSetTyping(chat.id, false).catch(() => {});
-      }, 2000);
+      }, 2500);
     } else {
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      isTypingActiveRef.current = false;
       apiSetTyping(chat.id, false).catch(() => {});
     }
   };
@@ -344,7 +382,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
               )}
             </div>
             <div className="text-[11px] font-medium flex items-center gap-2">
-              {presenceInfo.isOnline ? (
+              {chat.isTyping ? (
+                <span className="text-emerald-400 font-semibold italic flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  {(chat as any).typingUserName || 'Someone'} is typing...
+                </span>
+              ) : presenceInfo.isOnline ? (
                 <span className="text-emerald-400 font-semibold flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Online
                 </span>
@@ -411,7 +454,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       )}
 
       {/* Messages Scroll View */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900/60">
+      <div 
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900/60 relative"
+      >
         <div className="text-center my-2">
           <span className="bg-slate-900/90 text-slate-400 text-[10px] font-semibold uppercase tracking-wider px-3 py-1 rounded-full border border-slate-800">
             🔒 Production End-to-End Encrypted Session
@@ -553,7 +600,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                   >
                     {msg.isEdited && <span className="italic opacity-80">(edited)</span>}
                     <Lock className="w-2.5 h-2.5 opacity-70" />
-                    <span>{msg.timestamp}</span>
+                    <span>{formatMessageTime(msg.isoDate, msg.timestamp)}</span>
 
                     {isSelf && (
                       <span className="font-bold ml-0.5">
@@ -584,7 +631,28 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           })
         )}
 
+        {chat.isTyping && (
+          <div className="flex items-center space-x-2 text-xs text-emerald-400 bg-slate-900/95 border border-slate-800 rounded-full px-3.5 py-1.5 w-fit shadow-lg animate-pulse my-2">
+            <div className="flex space-x-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+            <span className="font-semibold text-[11px]">{(chat as any).typingUserName || 'Someone'} is typing...</span>
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
+
+        {showNewMessageBanner && (
+          <button
+            onClick={() => scrollToBottom(true)}
+            className="sticky bottom-4 left-1/2 -translate-x-1/2 z-30 bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-3.5 py-1.5 rounded-full text-xs font-bold shadow-xl border border-emerald-300 flex items-center space-x-1.5 animate-bounce cursor-pointer mx-auto"
+          >
+            <ArrowDown className="w-3.5 h-3.5" />
+            <span>New Message ↓</span>
+          </button>
+        )}
       </div>
 
       {/* Reply Banner */}

@@ -1123,7 +1123,12 @@ export default {
         const body: any = await request.json().catch(() => ({}));
         const { isTyping } = body;
 
-        broadcastEvent('typing:change', { chatId, userId: decodedUser.id, isTyping: Boolean(isTyping) });
+        broadcastEvent('typing:change', { 
+          chatId, 
+          userId: decodedUser.id, 
+          userName: decodedUser.name, 
+          isTyping: Boolean(isTyping) 
+        });
         return jsonResponse({ success: true });
       }
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Message } from '../types';
 import { Info, Check, CheckCheck, Clock, Lock, X } from 'lucide-react';
+import { formatMessageTime, formatFullDateTime } from '../utils/date';
 
 interface MessageInfoModalProps {
   isOpen: boolean;
@@ -61,13 +62,15 @@ export const MessageInfoModal: React.FC<MessageInfoModalProps> = ({
 
           <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
             <span className="text-slate-400 font-medium">Sent At</span>
-            <span className="text-slate-200 font-mono text-[11px]">{message.timestamp}</span>
+            <span className="text-slate-200 font-mono text-[11px]">
+              {formatMessageTime(message.isoDate, message.timestamp)}
+            </span>
           </div>
 
           <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
-            <span className="text-slate-400 font-medium">ISO Timestamp</span>
+            <span className="text-slate-400 font-medium">Date & Time</span>
             <span className="text-slate-400 font-mono text-[10px]">
-              {new Date(message.isoDate || Date.now()).toLocaleTimeString()}
+              {formatFullDateTime(message.isoDate)}
             </span>
           </div>
 

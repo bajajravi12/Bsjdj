@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Chat, User } from '../types';
 import { getDisplayAvatar } from '../utils/avatar';
+import { formatMessageTime } from '../utils/date';
 import { 
   Search, 
   Plus, 
@@ -243,7 +244,7 @@ interface ChatRowProps {
 const ChatRow: React.FC<ChatRowProps> = ({ chat, isSelected, onSelect, currentUserId }) => {
   const lastMsg = chat.lastMessage;
   const otherMember = (chat.members || []).find((m) => m.id !== currentUserId && m.id !== 'usr-self');
-  const isOtherOnline = otherMember ? otherMember.status === 'online' : true;
+  const isOtherOnline = otherMember ? otherMember.status === 'online' : false;
   const displayAvatar = getDisplayAvatar(chat.name, chat.avatar, chat.id);
 
   return (
@@ -285,7 +286,7 @@ const ChatRow: React.FC<ChatRowProps> = ({ chat, isSelected, onSelect, currentUs
             )}
           </div>
           <span className="text-[10px] text-slate-500 flex-shrink-0 font-medium">
-            {lastMsg?.timestamp || ''}
+            {lastMsg ? formatMessageTime(lastMsg.isoDate, lastMsg.timestamp) : ''}
           </span>
         </div>
 
