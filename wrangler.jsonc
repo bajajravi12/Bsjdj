@@ -12,7 +12,7 @@
     {
       "binding": "DB",
       "database_name": "aarvi-db",
-      "database_id": "894c63d8-e47c-4cf8-8d41-a45240741e74",
+      "database_id": "b67d7288-35e6-4328-8195-2939fe56ebc1",
       "migrations_dir": "./migrations"
     }
   ],
