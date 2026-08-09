@@ -294,7 +294,7 @@ async function getD1UserById(db: any, id: string): Promise<ServerUser | null> {
   }
 }
 
-async function getFullUser(db: any, id: string): Promise<ServerUser> {
+async function getFullUser(db: any, id: string): Promise<ServerUser | null> {
   if (usersDb[id] && usersDb[id].name && usersDb[id].username) {
     return usersDb[id];
   }
@@ -302,16 +302,7 @@ async function getFullUser(db: any, id: string): Promise<ServerUser> {
     const d1User = await getD1UserById(db, id);
     if (d1User) return d1User;
   }
-  return {
-    id,
-    name: 'User',
-    username: '@user',
-    avatar: generateInitialsAvatarSvg('User', id),
-    status: 'offline',
-    lastSeen: '',
-    publicKey: 'E2EE-KEY-DEFAULT',
-    isVerified: true,
-  };
+  return null;
 }
 
 async function getD1ChatById(db: any, chatId: string): Promise<ServerChat | null> {
@@ -409,7 +400,8 @@ async function getD1ChatsForUser(db: any, userId: string): Promise<any[]> {
       const chat = await getD1ChatById(db, cId);
       if (!chat) continue;
 
-      const members = await Promise.all(chat.memberIds.map((mId) => getFullUser(db, mId)));
+      const rawMembers = await Promise.all(chat.memberIds.map((mId) => getFullUser(db, mId)));
+      const members = rawMembers.filter((m): m is ServerUser => m !== null);
 
       let displayName = chat.name;
       let displayAvatar = chat.avatar;
@@ -732,6 +724,9 @@ export default {
           return jsonResponse({ error: 'Unauthorized: Invalid or missing token' }, 401);
         }
         let user = await getFullUser(env.DB, decodedUser.id);
+        if (!user) {
+          return jsonResponse({ error: 'Unauthorized: Account not found or deleted' }, 401);
+        }
         return jsonResponse({ user, status: 'authenticated' });
       }
 
@@ -840,7 +835,8 @@ export default {
               );
 
           if (existingChat) {
-            const members = await Promise.all(existingChat.memberIds.map((mId) => getFullUser(env.DB, mId)));
+            const rawMembers = await Promise.all(existingChat.memberIds.map((mId) => getFullUser(env.DB, mId)));
+            const members = rawMembers.filter((m): m is ServerUser => m !== null);
             let displayName = existingChat.name;
             let displayAvatar = existingChat.avatar;
 
@@ -897,7 +893,8 @@ export default {
           await saveD1Chat(env.DB, newChat);
         }
 
-        const members = await Promise.all(memberIds.map((mId) => getFullUser(env.DB, mId)));
+        const rawMembers = await Promise.all(memberIds.map((mId) => getFullUser(env.DB, mId)));
+        const members = rawMembers.filter((m): m is ServerUser => m !== null);
         const resChat = { ...newChat, members, unreadCount: 0 };
 
         broadcastEvent('chat:new', { chat: resChat });
@@ -950,6 +947,9 @@ export default {
         }
 
         const senderUser = await getFullUser(env.DB, currentUserId);
+        if (!senderUser) {
+          return jsonResponse({ error: 'Unauthorized: Sender user profile not found' }, 401);
+        }
         const msgId = `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
         const validIsoDate = clientIsoDate && !isNaN(new Date(clientIsoDate).getTime())

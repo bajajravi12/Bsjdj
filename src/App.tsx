@@ -49,14 +49,20 @@ export default function App() {
 
     apiGetMe()
       .then((res) => {
-        if (res && res.user) {
+        if (res && res.user && res.user.id) {
           setCurrentUser(res.user);
           setIsLoggedIn(true);
         } else {
           clearAuthToken();
+          setCurrentUser(null);
+          setIsLoggedIn(false);
         }
       })
-      .catch(() => clearAuthToken())
+      .catch(() => {
+        clearAuthToken();
+        setCurrentUser(null);
+        setIsLoggedIn(false);
+      })
       .finally(() => setIsAuthChecking(false));
   }, []);
 

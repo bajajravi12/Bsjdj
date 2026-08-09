@@ -204,10 +204,13 @@ app.post(['/api/auth/register', '/api/auth/signup'], (req, res) => {
   try {
     const { name, displayName, username, email, pin, password, bio } = req.body || {};
 
-    const rawName = (name || displayName || username || 'User').toString().trim();
+    const rawName = (name || displayName || username || '').toString().trim();
     const rawUsername = (username || email || name || '').toString().trim();
-    const rawPin = (pin || password || '1234').toString().trim();
+    const rawPin = (pin || password || '').toString().trim();
 
+    if (!rawName) {
+      return res.status(400).json({ error: 'Display Name is required' });
+    }
     if (!rawUsername) {
       return res.status(400).json({ error: 'Username is required' });
     }
