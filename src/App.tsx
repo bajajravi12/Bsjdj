@@ -339,13 +339,14 @@ export default function App() {
           setChats((prev) =>
             (prev || []).map((c) => (c.id === chatId ? { ...c, pinnedMessageId } : c))
           );
-        } else if (type === 'typing:change') {
+        } else if (type === 'typing:change' || type === 'typing:start' || type === 'typing:stop') {
           const { chatId, userId, userName, isTyping } = data;
+          const isTypingActive = type === 'typing:stop' ? false : Boolean(isTyping);
           if (userId !== currentUser.id) {
             setChats((prev) =>
               (prev || []).map((c) =>
                 c.id === chatId
-                  ? { ...c, isTyping: Boolean(isTyping), typingUserName: isTyping ? (userName || 'Someone') : undefined }
+                  ? { ...c, isTyping: isTypingActive, typingUserName: isTypingActive ? (userName || 'Someone') : undefined }
                   : c
               )
             );
@@ -355,7 +356,7 @@ export default function App() {
               clearTimeout(typingTimeoutRefs.current[chatId]);
             }
 
-            if (isTyping) {
+            if (isTypingActive) {
               typingTimeoutRefs.current[chatId] = setTimeout(() => {
                 setChats((prev) =>
                   (prev || []).map((c) =>
@@ -371,7 +372,7 @@ export default function App() {
             if ((prev || []).some((c) => c.id === chat.id)) return prev;
             return [chat, ...(prev || [])];
           });
-        } else if (type === 'presence:change') {
+        } else if (type === 'presence:change' || type === 'presence:update') {
           const { userId, status, lastSeen } = data;
           setChats((prev) =>
             (prev || []).map((c) => {
@@ -394,6 +395,8 @@ export default function App() {
       (status) => {
         setConnectionStatus(status);
         if (status === 'connected') {
+          // Send presence heartbeat immediately on reconnect
+          apiSendPresence('online').catch(() => {});
           // Recover missed background events on reconnect
           apiSync(lastSyncTimestampRef.current).then((syncRes) => {
             if (syncRes && syncRes.chats) {
@@ -490,10 +493,10 @@ export default function App() {
     // Initial online presence trigger
     apiSendPresence('online').catch(() => {});
 
-    // Heartbeat every 22 seconds
+    // Heartbeat every 18 seconds (server timeout is 45s)
     const interval = setInterval(() => {
       apiSendPresence('online').catch(() => {});
-    }, 22000);
+    }, 18000);
 
     const handleBeforeUnload = () => {
       try {

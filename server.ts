@@ -123,6 +123,55 @@ const messagesDb: Record<string, ServerMessage[]> = {};
 const readStatusDb: Record<string, Record<string, string[]>> = {}; // chatId -> userId -> readMessageIds
 const typingStatusDb: Record<string, Record<string, boolean>> = {}; // chatId -> userId -> isTyping
 
+// PRESENCE TIMEOUT CONFIGURATION (45 seconds)
+const PRESENCE_TIMEOUT_MS = 45000;
+
+export function getEffectiveUserStatus(user: ServerUser): { status: 'online' | 'offline'; lastSeen: string; lastActiveTimestamp?: number } {
+  if (!user) {
+    return { status: 'offline', lastSeen: new Date().toISOString() };
+  }
+  const now = Date.now();
+  const lastActive = user.lastActiveTimestamp || (user.lastSeen && !isNaN(new Date(user.lastSeen).getTime()) ? new Date(user.lastSeen).getTime() : 0);
+  const isRecentlyActive = lastActive > 0 && (now - lastActive < PRESENCE_TIMEOUT_MS);
+
+  if (user.status === 'online' && isRecentlyActive) {
+    return {
+      status: 'online',
+      lastSeen: user.lastSeen || new Date(lastActive).toISOString(),
+      lastActiveTimestamp: lastActive,
+    };
+  }
+
+  const lastSeenIso = lastActive > 0 ? new Date(lastActive).toISOString() : (user.lastSeen || new Date().toISOString());
+  return {
+    status: 'offline',
+    lastSeen: lastSeenIso,
+    lastActiveTimestamp: lastActive,
+  };
+}
+
+// Background Task: Enforce Server-Authoritative Presence Expiry Every 10 Seconds
+setInterval(() => {
+  const now = Date.now();
+  Object.values(usersDb).forEach((user) => {
+    if (user.status === 'online') {
+      const lastActive = user.lastActiveTimestamp || (user.lastSeen && !isNaN(new Date(user.lastSeen).getTime()) ? new Date(user.lastSeen).getTime() : 0);
+      const timeDiff = now - lastActive;
+
+      if (lastActive === 0 || timeDiff >= PRESENCE_TIMEOUT_MS) {
+        console.log(`[Presence Timeout] User ${user.id} (${user.name}) heartbeat expired (${Math.round(timeDiff / 1000)}s ago). Marking OFFLINE.`);
+        user.status = 'offline';
+        const lastSeenIso = lastActive > 0 ? new Date(lastActive).toISOString() : new Date().toISOString();
+        user.lastSeen = lastSeenIso;
+
+        const payload = { userId: user.id, status: 'offline', lastSeen: lastSeenIso };
+        broadcastToAll('presence:change', payload);
+        broadcastToAll('presence:update', payload);
+      }
+    }
+  });
+}, 10000);
+
 // Active SSE Connections
 interface SSEClient {
   id: string;
@@ -327,7 +376,15 @@ app.get(['/api/auth/me', '/api/me'], authenticateJWT, (req: any, res) => {
   if (!user) {
     return res.status(404).json({ error: 'User profile not found' });
   }
-  res.json({ user, status: 'authenticated' });
+  const eff = getEffectiveUserStatus(user);
+  res.json({
+    user: {
+      ...user,
+      status: eff.status,
+      lastSeen: eff.lastSeen,
+    },
+    status: 'authenticated',
+  });
 });
 
 // 5. Search Registered Users (for New Chat)
@@ -343,6 +400,14 @@ app.get('/api/users/search', authenticateJWT, (req: any, res) => {
         u.name.toLowerCase().includes(query) ||
         u.username.toLowerCase().includes(query)
       );
+    })
+    .map((u) => {
+      const eff = getEffectiveUserStatus(u);
+      return {
+        ...u,
+        status: eff.status,
+        lastSeen: eff.lastSeen,
+      };
     });
 
   res.json({ users: matches });
@@ -379,11 +444,16 @@ app.get(['/api/realtime/stream', '/api/realtime'], (req, res) => {
   res.write(`data: ${JSON.stringify({ type: 'connected', clientId, userId, timestamp: new Date().toISOString() })}\n\n`);
 
   // Update presence status to online
-  const nowIso = new Date().toISOString();
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
   if (usersDb[userId]) {
     usersDb[userId].status = 'online';
+    usersDb[userId].lastActiveTimestamp = now;
     usersDb[userId].lastSeen = nowIso;
-    broadcastToAll('presence:change', { userId, status: 'online', lastSeen: nowIso });
+    const payload = { userId, status: 'online', lastSeen: nowIso };
+    broadcastToAll('presence:change', payload);
+    broadcastToAll('presence:update', payload);
+    console.log(`[SSE Connection] User ${userId} connected via client ${clientId}`);
   }
 
   req.on('close', () => {
@@ -391,10 +461,14 @@ app.get(['/api/realtime/stream', '/api/realtime'], (req, res) => {
     if (usersDb[userId]) {
       // Check if user has other active connections
       const remainingUserClients = sseClients.filter((c) => c.userId === userId);
+      console.log(`[SSE Disconnect] Client ${clientId} closed for ${userId}. Remaining: ${remainingUserClients.length}`);
       if (remainingUserClients.length === 0) {
         usersDb[userId].status = 'offline';
-        usersDb[userId].lastSeen = new Date().toISOString();
-        broadcastToAll('presence:change', { userId, status: 'offline', lastSeen: usersDb[userId].lastSeen });
+        const lastSeenIso = usersDb[userId].lastActiveTimestamp ? new Date(usersDb[userId].lastActiveTimestamp!).toISOString() : new Date().toISOString();
+        usersDb[userId].lastSeen = lastSeenIso;
+        const payload = { userId, status: 'offline', lastSeen: lastSeenIso };
+        broadcastToAll('presence:change', payload);
+        broadcastToAll('presence:update', payload);
       }
     }
   });
@@ -407,7 +481,17 @@ app.get('/api/chats', authenticateJWT, (req: any, res) => {
   const userChats = Object.values(chatsDb)
     .filter((c) => c.memberIds.includes(currentUserId))
     .map((c) => {
-      const members = c.memberIds.map((id) => usersDb[id]).filter(Boolean);
+      const members = c.memberIds
+        .map((id) => usersDb[id])
+        .filter(Boolean)
+        .map((m) => {
+          const eff = getEffectiveUserStatus(m);
+          return {
+            ...m,
+            status: eff.status,
+            lastSeen: eff.lastSeen,
+          };
+        });
       // Calculate unread count for current user
       const chatMsgs = messagesDb[c.id] || [];
       const userReadIds = (readStatusDb[c.id] && readStatusDb[c.id][currentUserId]) || [];
@@ -797,28 +881,44 @@ app.post('/api/chats/:chatId/typing', authenticateJWT, (req: any, res) => {
 
   const chat = chatsDb[chatId];
   if (chat && chat.memberIds.includes(currentUserId)) {
-    broadcastToUsers(chat.memberIds, 'typing:change', {
+    const payload = {
       chatId,
       userId: currentUserId,
       userName: usersDb[currentUserId]?.name || 'User',
       isTyping: Boolean(isTyping),
-    });
+    };
+    broadcastToUsers(chat.memberIds, 'typing:change', payload);
+    broadcastToUsers(chat.memberIds, isTyping ? 'typing:start' : 'typing:stop', payload);
   }
 
   res.json({ success: true });
 });
 
 // 13. Presence Heartbeat
-app.post(['/api/presence', '/api/users/presence'], authenticateJWT, (req: any, res) => {
+app.post(['/api/presence', '/api/presence/heartbeat', '/api/users/presence'], authenticateJWT, (req: any, res) => {
   const currentUserId = req.user.id;
-  const { status } = req.body;
-  const nowIso = new Date().toISOString();
+  const { status } = req.body || {};
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
   const newStatus = status === 'offline' ? 'offline' : 'online';
 
   if (usersDb[currentUserId]) {
-    usersDb[currentUserId].status = newStatus;
-    usersDb[currentUserId].lastSeen = nowIso;
-    broadcastToAll('presence:change', { userId: currentUserId, status: newStatus, lastSeen: nowIso });
+    const user = usersDb[currentUserId];
+    const prevStatus = user.status;
+    
+    user.status = newStatus;
+    if (newStatus === 'online') {
+      user.lastActiveTimestamp = now;
+    }
+    user.lastSeen = nowIso;
+
+    console.log(`[Presence Heartbeat] User ${currentUserId} (${user.name}) -> ${newStatus}`);
+
+    if (prevStatus !== newStatus || newStatus === 'online') {
+      const payload = { userId: currentUserId, status: newStatus, lastSeen: nowIso };
+      broadcastToAll('presence:change', payload);
+      broadcastToAll('presence:update', payload);
+    }
   }
 
   res.json({ success: true, status: newStatus, lastSeen: nowIso });
@@ -829,7 +929,26 @@ app.get('/api/sync', authenticateJWT, (req: any, res) => {
   const currentUserId = req.user.id;
   const since = req.query.since as string;
 
-  const userChats = Object.values(chatsDb).filter((c) => c.memberIds.includes(currentUserId));
+  const userChats = Object.values(chatsDb)
+    .filter((c) => c.memberIds.includes(currentUserId))
+    .map((c) => {
+      const members = c.memberIds
+        .map((id) => usersDb[id])
+        .filter(Boolean)
+        .map((m) => {
+          const eff = getEffectiveUserStatus(m);
+          return {
+            ...m,
+            status: eff.status,
+            lastSeen: eff.lastSeen,
+          };
+        });
+      return {
+        ...c,
+        members,
+      };
+    });
+
   const userMessagesMap: Record<string, ServerMessage[]> = {};
 
   userChats.forEach((c) => {
