@@ -515,7 +515,7 @@ app.get('/api/chats/:chatId/messages', authenticateJWT, (req: any, res) => {
 // 10. Send Message (with ACK & Deduplication)
 app.post(['/api/messages', '/api/messages/send', '/api/messages/reply'], authenticateJWT, (req: any, res) => {
   const currentUserId = req.user.id;
-  const { chatId, text, mediaType, mediaUrl, replyToId, replyToText, clientMsgId } = req.body;
+  const { chatId, text, mediaType, mediaUrl, replyToId, replyToText, clientMsgId, isoDate: clientIsoDate } = req.body;
 
   if (!chatId || !text) {
     return res.status(400).json({ error: 'chatId and text are required' });
@@ -537,6 +537,10 @@ app.post(['/api/messages', '/api/messages/send', '/api/messages/reply'], authent
   const senderUser = usersDb[currentUserId];
   const msgId = `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
+  const validIsoDate = clientIsoDate && !isNaN(new Date(clientIsoDate).getTime())
+    ? new Date(clientIsoDate).toISOString()
+    : new Date().toISOString();
+
   const newMsg: ServerMessage = {
     id: msgId,
     clientMsgId,
@@ -544,8 +548,8 @@ app.post(['/api/messages', '/api/messages/send', '/api/messages/reply'], authent
     senderId: currentUserId,
     senderName: senderUser ? senderUser.name : 'AARVI User',
     text,
-    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    isoDate: new Date().toISOString(),
+    timestamp: validIsoDate,
+    isoDate: validIsoDate,
     status: 'sent',
     mediaType,
     mediaUrl,

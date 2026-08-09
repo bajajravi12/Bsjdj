@@ -927,7 +927,7 @@ export default {
         }
         const currentUserId = decodedUser.id;
         const body: any = await request.json().catch(() => ({}));
-        const { chatId, text, mediaType, mediaUrl, replyToId, replyToText, clientMsgId } = body;
+        const { chatId, text, mediaType, mediaUrl, replyToId, replyToText, clientMsgId, isoDate: clientIsoDate } = body;
 
         if (!chatId || !text) {
           return jsonResponse({ error: 'chatId and text are required' }, 400);
@@ -952,6 +952,10 @@ export default {
         const senderUser = await getFullUser(env.DB, currentUserId);
         const msgId = `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
+        const validIsoDate = clientIsoDate && !isNaN(new Date(clientIsoDate).getTime())
+          ? new Date(clientIsoDate).toISOString()
+          : new Date().toISOString();
+
         const newMsg: ServerMessage = {
           id: msgId,
           clientMsgId,
@@ -959,8 +963,8 @@ export default {
           senderId: currentUserId,
           senderName: senderUser.name,
           text,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          isoDate: new Date().toISOString(),
+          timestamp: validIsoDate,
+          isoDate: validIsoDate,
           status: 'sent',
           mediaType,
           mediaUrl,

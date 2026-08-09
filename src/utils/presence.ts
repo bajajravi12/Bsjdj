@@ -1,4 +1,5 @@
 // Presence Utility: Formats online status and last seen timestamps
+import { parseUtcDate } from './date';
 
 export function formatLastSeen(status?: string, lastSeen?: string | number): {
   text: string;
@@ -16,8 +17,8 @@ export function formatLastSeen(status?: string, lastSeen?: string | number): {
     return { text: 'Last seen just now', isOnline: false };
   }
 
-  const date = new Date(lastSeen);
-  if (isNaN(date.getTime())) {
+  const date = parseUtcDate(lastSeen);
+  if (!date) {
     return {
       text: typeof lastSeen === 'string' ? (lastSeen.startsWith('Last seen') ? lastSeen : `Last seen ${lastSeen}`) : 'Offline',
       isOnline: false,

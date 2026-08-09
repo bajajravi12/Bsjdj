@@ -170,6 +170,7 @@ export const apiSendMessage = async (
     replyToId,
     replyToText,
     clientMsgId: clientMsgId || `cmsg-${Date.now()}-${Math.random()}`,
+    isoDate: new Date().toISOString(),
   };
 
   let attempts = 0;

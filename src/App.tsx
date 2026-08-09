@@ -68,10 +68,6 @@ export default function App() {
       const fetchedChats = data.chats || [];
       setChats(fetchedChats);
 
-      if (fetchedChats.length > 0 && !activeChatId) {
-        setActiveChatId(fetchedChats[0].id);
-      }
-
       // Fetch message history for each chat
       fetchedChats.forEach((chat: Chat) => {
         apiFetchMessages(chat.id).then((mRes) => {
@@ -632,7 +628,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-slate-950 flex flex-col font-sans antialiased selection:bg-emerald-500 selection:text-slate-950">
+    <div className="h-[100dvh] w-full max-w-full overflow-hidden bg-slate-950 flex flex-col font-sans antialiased selection:bg-emerald-500 selection:text-slate-950">
       {/* Realtime Connection Status Indicator Banner */}
       {connectionStatus !== 'connected' && (
         <div className="bg-amber-950/80 border-b border-amber-900 text-amber-200 text-[11px] font-medium px-4 py-1 text-center flex items-center justify-center gap-2 z-50">
