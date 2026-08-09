@@ -25,14 +25,65 @@ import {
   getAuthToken 
 } from './services/api';
 
+// Helper to safely merge server messages with local state, preserving in-flight optimistic messages
+function mergeServerAndLocalMessages(existingMsgs: Message[] = [], incomingMsgs: Message[] = []): Message[] {
+  const serverIds = new Set(incomingMsgs.map((m) => m.id));
+  const serverClientIds = new Set(incomingMsgs.map((m) => m.clientMsgId).filter(Boolean) as string[]);
+
+  const existingMap = new Map<string, Message>();
+  for (const m of existingMsgs) {
+    existingMap.set(m.id, m);
+    if (m.clientMsgId) existingMap.set(m.clientMsgId, m);
+  }
+
+  // 1. Process server messages, enriching with existing local timestamps
+  const mergedServer = incomingMsgs.map((inc) => {
+    const ext = existingMap.get(inc.id) || (inc.clientMsgId ? existingMap.get(inc.clientMsgId) : undefined);
+    if (ext) {
+      return {
+        ...inc,
+        isoDate: ext.isoDate || inc.isoDate,
+        timestamp: ext.timestamp || inc.timestamp,
+      };
+    }
+    return inc;
+  });
+
+  // 2. Preserve any in-flight / optimistic messages that server has not yet acknowledged
+  const pendingMsgs = existingMsgs.filter((m) => {
+    const isPending = m.status === 'sending' || m.id.startsWith('cmsg-');
+    if (!isPending) return false;
+    const matchesServerId = serverIds.has(m.id);
+    const matchesServerClientId = m.clientMsgId ? serverClientIds.has(m.clientMsgId) : false;
+    return !matchesServerId && !matchesServerClientId;
+  });
+
+  return [...mergedServer, ...pendingMsgs];
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
 
   const [chats, setChats] = useState<Chat[]>([]);
-  const [messagesMap, setMessagesMap] = useState<Record<string, Message[]>>({});
+  const [messagesMap, setMessagesMap] = useState<Record<string, Message[]>>(() => {
+    try {
+      const cached = localStorage.getItem('aarvi_messages_cache');
+      if (cached) return JSON.parse(cached);
+    } catch {}
+    return {};
+  });
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+
+  // Sync messagesMap cache to localStorage
+  useEffect(() => {
+    if (messagesMap && Object.keys(messagesMap).length > 0) {
+      try {
+        localStorage.setItem('aarvi_messages_cache', JSON.stringify(messagesMap));
+      } catch {}
+    }
+  }, [messagesMap]);
 
   const [showNewChatModal, setShowNewChatModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -96,13 +147,15 @@ export default function App() {
       const fetchedChats = data.chats || [];
       setChats(fetchedChats);
 
-      // Fetch message history for each chat
+      // Fetch message history for each chat with safe merging
       fetchedChats.forEach((chat: Chat) => {
         apiFetchMessages(chat.id).then((mRes) => {
-          setMessagesMap((prev) => ({
-            ...prev,
-            [chat.id]: mRes.messages || [],
-          }));
+          if (mRes && mRes.messages) {
+            setMessagesMap((prev) => ({
+              ...prev,
+              [chat.id]: mergeServerAndLocalMessages(prev[chat.id] || [], mRes.messages),
+            }));
+          }
         });
       });
     });
@@ -121,10 +174,27 @@ export default function App() {
 
           setMessagesMap((prevMap) => {
             const currentMsgs = prevMap[chatId] || [];
-            // De-duplication check
-            if (currentMsgs.some((m) => m.id === message.id || (m.clientMsgId && m.clientMsgId === message.clientMsgId))) {
-              return prevMap;
+            // Reconcile or append incoming message
+            const idx = currentMsgs.findIndex(
+              (m) =>
+                m.id === message.id ||
+                (m.clientMsgId && m.clientMsgId === message.clientMsgId) ||
+                (message.clientMsgId && m.id === message.clientMsgId)
+            );
+
+            if (idx !== -1) {
+              const updated = [...currentMsgs];
+              updated[idx] = {
+                ...message,
+                isoDate: updated[idx].isoDate || message.isoDate,
+                timestamp: updated[idx].timestamp || message.timestamp,
+              };
+              return {
+                ...prevMap,
+                [chatId]: updated,
+              };
             }
+
             return {
               ...prevMap,
               [chatId]: [...currentMsgs, message],
@@ -365,36 +435,21 @@ export default function App() {
                 const incomingMsgs = msgs as Message[];
                 const existingMsgs = prevMap[cId] || [];
 
-                const existingMap = new Map<string, Message>(existingMsgs.map((m) => [m.id, m]));
-                for (const m of existingMsgs) {
-                  if (m.clientMsgId) existingMap.set(m.clientMsgId, m);
-                }
+                const merged = mergeServerAndLocalMessages(existingMsgs, incomingMsgs);
 
-                const mergedIncoming = incomingMsgs.map((inc) => {
-                  const ext = existingMap.get(inc.id) || (inc.clientMsgId ? existingMap.get(inc.clientMsgId) : undefined);
-                  if (ext) {
-                    return {
-                      ...inc,
-                      isoDate: ext.isoDate || inc.isoDate,
-                      timestamp: ext.timestamp || inc.timestamp,
-                    };
-                  }
-                  return inc;
-                });
-
-                if (existingMsgs.length !== mergedIncoming.length) {
-                  nextMap[cId] = mergedIncoming;
+                if (existingMsgs.length !== merged.length) {
+                  nextMap[cId] = merged;
                   updated = true;
                 } else {
-                  for (let i = 0; i < mergedIncoming.length; i++) {
+                  for (let i = 0; i < merged.length; i++) {
                     if (
-                      existingMsgs[i]?.id !== mergedIncoming[i]?.id ||
-                      existingMsgs[i]?.status !== mergedIncoming[i]?.status ||
-                      existingMsgs[i]?.text !== mergedIncoming[i]?.text ||
-                      existingMsgs[i]?.isEdited !== mergedIncoming[i]?.isEdited ||
-                      JSON.stringify(existingMsgs[i]?.reactions) !== JSON.stringify(mergedIncoming[i]?.reactions)
+                      existingMsgs[i]?.id !== merged[i]?.id ||
+                      existingMsgs[i]?.status !== merged[i]?.status ||
+                      existingMsgs[i]?.text !== merged[i]?.text ||
+                      existingMsgs[i]?.isEdited !== merged[i]?.isEdited ||
+                      JSON.stringify(existingMsgs[i]?.reactions) !== JSON.stringify(merged[i]?.reactions)
                     ) {
-                      nextMap[cId] = mergedIncoming;
+                      nextMap[cId] = merged;
                       updated = true;
                       break;
                     }
@@ -484,6 +539,18 @@ export default function App() {
     setChats((prev) =>
       (prev || []).map((c) => (c.id === chatId ? { ...c, unreadCount: 0 } : c))
     );
+
+    // Fetch latest messages for this chat in background and merge with local state
+    apiFetchMessages(chatId)
+      .then((mRes) => {
+        if (mRes && mRes.messages) {
+          setMessagesMap((prev) => ({
+            ...prev,
+            [chatId]: mergeServerAndLocalMessages(prev[chatId] || [], mRes.messages),
+          }));
+        }
+      })
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -509,15 +576,15 @@ export default function App() {
   ) => {
     if (!activeChatId || !currentUser) return;
 
+    const targetChatId = activeChatId;
     const clientMsgId = `cmsg-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-
     const nowIso = new Date().toISOString();
 
     // Optimistic UI Message
     const optimisticMsg: Message = {
       id: clientMsgId,
       clientMsgId,
-      chatId: activeChatId,
+      chatId: targetChatId,
       senderId: currentUser.id,
       senderName: currentUser.name,
       text,
@@ -533,16 +600,16 @@ export default function App() {
     // Update Local State Optimistically
     setMessagesMap((prevMap) => ({
       ...prevMap,
-      [activeChatId]: [...(prevMap[activeChatId] || []), optimisticMsg],
+      [targetChatId]: [...(prevMap[targetChatId] || []), optimisticMsg],
     }));
 
     setChats((prev) =>
-      (prev || []).map((c) => (c.id === activeChatId ? { ...c, lastMessage: optimisticMsg } : c))
+      (prev || []).map((c) => (c.id === targetChatId ? { ...c, lastMessage: optimisticMsg } : c))
     );
 
     try {
       const ackRes = await apiSendMessage(
-        activeChatId,
+        targetChatId,
         text,
         mediaType,
         mediaUrl,
@@ -555,27 +622,35 @@ export default function App() {
         const confirmedMsg = ackRes.message;
         // Reconcile optimistic message with server message while preserving initial client creation timestamp
         setMessagesMap((prevMap) => {
-          const currentMsgs = prevMap[activeChatId] || [];
+          const currentMsgs = prevMap[targetChatId] || [];
+          const idx = currentMsgs.findIndex(
+            (m) => m.clientMsgId === clientMsgId || m.id === clientMsgId || m.id === confirmedMsg.id
+          );
+
+          if (idx !== -1) {
+            const updated = [...currentMsgs];
+            const preservedIso = currentMsgs[idx].isoDate || confirmedMsg.isoDate || nowIso;
+            const preservedTs = currentMsgs[idx].timestamp || confirmedMsg.timestamp || preservedIso;
+            updated[idx] = {
+              ...confirmedMsg,
+              isoDate: preservedIso,
+              timestamp: preservedTs,
+            };
+            return {
+              ...prevMap,
+              [targetChatId]: updated,
+            };
+          }
+
           return {
             ...prevMap,
-            [activeChatId]: currentMsgs.map((m) => {
-              if (m.clientMsgId === clientMsgId || m.id === clientMsgId) {
-                const preservedIso = m.isoDate || confirmedMsg.isoDate || nowIso;
-                const preservedTs = m.timestamp || confirmedMsg.timestamp || preservedIso;
-                return {
-                  ...confirmedMsg,
-                  isoDate: preservedIso,
-                  timestamp: preservedTs,
-                };
-              }
-              return m;
-            }),
+            [targetChatId]: [...currentMsgs, confirmedMsg],
           };
         });
 
         setChats((prev) =>
           (prev || []).map((c) =>
-            c.id === activeChatId ? { ...c, lastMessage: confirmedMsg } : c
+            c.id === targetChatId ? { ...c, lastMessage: confirmedMsg } : c
           )
         );
       }
