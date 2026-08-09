@@ -284,19 +284,36 @@ export default function App() {
                 const incomingMsgs = msgs as Message[];
                 const existingMsgs = prevMap[cId] || [];
 
-                if (existingMsgs.length !== incomingMsgs.length) {
-                  nextMap[cId] = incomingMsgs;
+                const existingMap = new Map<string, Message>(existingMsgs.map((m) => [m.id, m]));
+                for (const m of existingMsgs) {
+                  if (m.clientMsgId) existingMap.set(m.clientMsgId, m);
+                }
+
+                const mergedIncoming = incomingMsgs.map((inc) => {
+                  const ext = existingMap.get(inc.id) || (inc.clientMsgId ? existingMap.get(inc.clientMsgId) : undefined);
+                  if (ext) {
+                    return {
+                      ...inc,
+                      isoDate: ext.isoDate || inc.isoDate,
+                      timestamp: ext.timestamp || inc.timestamp,
+                    };
+                  }
+                  return inc;
+                });
+
+                if (existingMsgs.length !== mergedIncoming.length) {
+                  nextMap[cId] = mergedIncoming;
                   updated = true;
                 } else {
-                  for (let i = 0; i < incomingMsgs.length; i++) {
+                  for (let i = 0; i < mergedIncoming.length; i++) {
                     if (
-                      existingMsgs[i]?.id !== incomingMsgs[i]?.id ||
-                      existingMsgs[i]?.status !== incomingMsgs[i]?.status ||
-                      existingMsgs[i]?.text !== incomingMsgs[i]?.text ||
-                      existingMsgs[i]?.isEdited !== incomingMsgs[i]?.isEdited ||
-                      JSON.stringify(existingMsgs[i]?.reactions) !== JSON.stringify(incomingMsgs[i]?.reactions)
+                      existingMsgs[i]?.id !== mergedIncoming[i]?.id ||
+                      existingMsgs[i]?.status !== mergedIncoming[i]?.status ||
+                      existingMsgs[i]?.text !== mergedIncoming[i]?.text ||
+                      existingMsgs[i]?.isEdited !== mergedIncoming[i]?.isEdited ||
+                      JSON.stringify(existingMsgs[i]?.reactions) !== JSON.stringify(mergedIncoming[i]?.reactions)
                     ) {
-                      nextMap[cId] = incomingMsgs;
+                      nextMap[cId] = mergedIncoming;
                       updated = true;
                       break;
                     }
@@ -413,6 +430,8 @@ export default function App() {
 
     const clientMsgId = `cmsg-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
 
+    const nowIso = new Date().toISOString();
+
     // Optimistic UI Message
     const optimisticMsg: Message = {
       id: clientMsgId,
@@ -421,8 +440,8 @@ export default function App() {
       senderId: currentUser.id,
       senderName: currentUser.name,
       text,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      isoDate: new Date().toISOString(),
+      timestamp: nowIso,
+      isoDate: nowIso,
       status: 'sending',
       mediaType,
       mediaUrl,
@@ -453,14 +472,23 @@ export default function App() {
 
       if (ackRes && ackRes.message) {
         const confirmedMsg = ackRes.message;
-        // Reconcile optimistic message with server message
+        // Reconcile optimistic message with server message while preserving initial client creation timestamp
         setMessagesMap((prevMap) => {
           const currentMsgs = prevMap[activeChatId] || [];
           return {
             ...prevMap,
-            [activeChatId]: currentMsgs.map((m) =>
-              m.clientMsgId === clientMsgId || m.id === clientMsgId ? confirmedMsg : m
-            ),
+            [activeChatId]: currentMsgs.map((m) => {
+              if (m.clientMsgId === clientMsgId || m.id === clientMsgId) {
+                const preservedIso = m.isoDate || confirmedMsg.isoDate || nowIso;
+                const preservedTs = m.timestamp || confirmedMsg.timestamp || preservedIso;
+                return {
+                  ...confirmedMsg,
+                  isoDate: preservedIso,
+                  timestamp: preservedTs,
+                };
+              }
+              return m;
+            }),
           };
         });
 
@@ -555,6 +583,7 @@ export default function App() {
 
   const handleForwardMessage = async (targetChatId: string, message: Message) => {
     const text = `[Forwarded from ${message.senderName}]: ${message.text}`;
+    const fwdIso = new Date().toISOString();
     await apiSendMessage(targetChatId, text, message.mediaType, message.mediaUrl);
     setMessagesMap((prev) => {
       const targetMsgs = prev[targetChatId] || [];
@@ -564,8 +593,8 @@ export default function App() {
         senderId: currentUser!.id,
         senderName: currentUser!.name,
         text,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isoDate: new Date().toISOString(),
+        timestamp: fwdIso,
+        isoDate: fwdIso,
         status: 'sent',
         mediaType: message.mediaType,
         mediaUrl: message.mediaUrl,

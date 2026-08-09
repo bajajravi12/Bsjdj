@@ -6,20 +6,24 @@ interface ApkDownloadButtonProps {
   variant?: 'primary' | 'secondary' | 'outline';
 }
 
+export function getApkDownloadUrl(): string {
+  const envUrl = (import.meta as any).env?.VITE_APK_DOWNLOAD_URL || (process.env as any)?.VITE_APK_DOWNLOAD_URL || '';
+  return String(envUrl).trim();
+}
+
 export const ApkDownloadButton: React.FC<ApkDownloadButtonProps> = ({
   className = '',
   variant = 'outline',
 }) => {
-  const envUrl = (import.meta as any).env?.VITE_APK_DOWNLOAD_URL || (process.env as any)?.VITE_APK_DOWNLOAD_URL || '';
-  const apkUrl = String(envUrl).trim();
+  const apkUrl = getApkDownloadUrl();
+  if (!apkUrl) {
+    return null;
+  }
+
   const isAndroid = typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
 
   const handleClick = () => {
-    if (apkUrl) {
-      window.open(apkUrl, '_blank');
-    } else {
-      alert('Android APK Download URL is not configured.\nSet VITE_APK_DOWNLOAD_URL in environment to enable.');
-    }
+    window.open(apkUrl, '_blank');
   };
 
   const variantStyle =
@@ -34,7 +38,7 @@ export const ApkDownloadButton: React.FC<ApkDownloadButtonProps> = ({
       type="button"
       onClick={handleClick}
       className={`w-full py-2.5 px-4 rounded-xl text-xs flex items-center justify-center space-x-2 transition-all active:scale-[0.98] ${variantStyle} ${className}`}
-      title={apkUrl ? 'Download Android APK' : 'APK download URL not set'}
+      title="Download Android APK"
     >
       <Smartphone className="w-4 h-4 text-emerald-400" />
       <span>Download Android App (.APK)</span>

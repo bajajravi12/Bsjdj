@@ -26,6 +26,7 @@ export interface Message {
   text: string;
   timestamp: string;
   isoDate: string;
+  createdAt?: string;
   status: 'sending' | 'sent' | 'delivered' | 'read';
   isSecret?: boolean;
   selfDestructSeconds?: number;

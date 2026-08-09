@@ -17,7 +17,7 @@ import {
   Image as ImageIcon,
   Sliders
 } from 'lucide-react';
-import { ApkDownloadButton } from './ApkDownloadButton';
+import { ApkDownloadButton, getApkDownloadUrl } from './ApkDownloadButton';
 
 interface SecuritySettingsModalProps {
   isOpen: boolean;
@@ -140,12 +140,14 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
             </div>
 
             {/* APK Download Button */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
-                Android Application
-              </label>
-              <ApkDownloadButton variant="secondary" />
-            </div>
+            {Boolean(getApkDownloadUrl()) && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+                  Android Application
+                </label>
+                <ApkDownloadButton variant="secondary" />
+              </div>
+            )}
 
             {/* Logout */}
             <div className="pt-2 border-t border-slate-800 flex items-center justify-between">

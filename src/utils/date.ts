@@ -14,7 +14,7 @@ export function parseUtcDate(dateStr?: string | number | null): Date | null {
 
   // If SQL datetime "YYYY-MM-DD HH:MM:SS" without T/Z
   if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(str)) {
-    str = str.replace(' ', 'T');
+    str = str.replace(' ', 'T') + 'Z';
   }
 
   // If ISO string without timezone offset (e.g. "2026-08-08T18:18:55")
@@ -26,25 +26,20 @@ export function parseUtcDate(dateStr?: string | number | null): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-export function formatMessageTime(isoDate?: string, rawTimestamp?: string): string {
-  if (isoDate) {
-    const d = parseUtcDate(isoDate);
+export function formatMessageTime(isoDate?: string, rawTimestamp?: string, createdAt?: string): string {
+  const dateVal = isoDate || createdAt || rawTimestamp;
+  if (dateVal) {
+    const d = parseUtcDate(dateVal);
     if (d) {
       return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
     }
   }
 
-  if (rawTimestamp) {
-    const d = parseUtcDate(rawTimestamp);
-    if (d) {
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
-    }
-    if (/^\d{1,2}:\d{2}\s*(AM|PM)?$/i.test(rawTimestamp.trim())) {
-      return rawTimestamp.trim();
-    }
+  if (rawTimestamp && /^\d{1,2}:\d{2}\s*(AM|PM)?$/i.test(rawTimestamp.trim())) {
+    return rawTimestamp.trim();
   }
 
-  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+  return '';
 }
 
 export function formatFullDateTime(isoDate?: string): string {
