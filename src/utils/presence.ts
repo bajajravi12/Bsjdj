@@ -47,9 +47,11 @@ export function formatLastSeen(status?: string, lastSeen?: string | number): {
     now.getMonth() === date.getMonth() &&
     now.getFullYear() === date.getFullYear();
 
+  const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+
   if (isSameDay) {
     return {
-      text: diffHours === 1 ? 'Last seen 1 hour ago' : `Last seen ${diffHours} hours ago`,
+      text: `Last seen today at ${timeStr}`,
       isOnline: false,
     };
   }
@@ -60,8 +62,6 @@ export function formatLastSeen(status?: string, lastSeen?: string | number): {
     yesterday.getDate() === date.getDate() &&
     yesterday.getMonth() === date.getMonth() &&
     yesterday.getFullYear() === date.getFullYear();
-
-  const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   if (isYesterday) {
     return { text: `Last seen yesterday at ${timeStr}`, isOnline: false };

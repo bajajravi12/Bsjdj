@@ -7,6 +7,8 @@ import { NewChatModal } from './components/NewChatModal';
 import { SecuritySettingsModal } from './components/SecuritySettingsModal';
 import { ImageLightboxModal } from './components/ImageLightboxModal';
 import { playSoundEffect } from './utils/audioEffects';
+import { getDisplayAvatar } from './utils/avatar';
+import { Bell, X } from 'lucide-react';
 import { 
   apiGetMe, 
   apiFetchChats, 
@@ -37,7 +39,27 @@ export default function App() {
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'offline'>('offline');
 
+  const [inAppToast, setInAppToast] = useState<{
+    id: string;
+    chatId: string;
+    senderName: string;
+    text: string;
+    avatar?: string;
+  } | null>(null);
+
   const lastSyncTimestampRef = useRef<string>(new Date().toISOString());
+  const typingTimeoutRefs = useRef<Record<string, any>>({});
+  const toastTimerRef = useRef<any>(null);
+  const activeChatIdRef = useRef<string | null>(activeChatId);
+  const chatsRef = useRef<Chat[]>(chats);
+
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId;
+  }, [activeChatId]);
+
+  useEffect(() => {
+    chatsRef.current = chats;
+  }, [chats]);
 
   // 1. Initial Authentication Check on Mount
   useEffect(() => {
@@ -127,8 +149,49 @@ export default function App() {
             });
           });
 
-          if (message.senderId !== currentUser.id) {
+          if (message.senderId !== currentUser.id && appSettings.notifications !== false) {
             playSoundEffect('receive');
+
+            if ('vibrate' in navigator) {
+              try { navigator.vibrate([120, 80, 120]); } catch {}
+            }
+
+            const currentChatList = chatsRef.current || [];
+            const targetChat = currentChatList.find((c) => c.id === chatId);
+            const otherMember = (targetChat?.members || []).find((m) => m.id === message.senderId);
+            const senderName = message.senderName || otherMember?.name || targetChat?.name || 'AARVI User';
+            const senderAvatar = message.senderAvatar || otherMember?.avatar || targetChat?.avatar;
+            const previewText = message.text || (message.mediaType ? `[${message.mediaType.toUpperCase()}]` : 'Sent a message');
+
+            // Native Browser Push Notification (Mobile & Laptop)
+            if ('Notification' in window && Notification.permission === 'granted') {
+              try {
+                const notif = new Notification(`AARVI: ${senderName}`, {
+                  body: previewText,
+                  icon: senderAvatar || '/icon.png',
+                  tag: `aarvi-chat-${chatId}`,
+                });
+                notif.onclick = () => {
+                  window.focus();
+                  setActiveChatId(chatId);
+                };
+              } catch {}
+            }
+
+            // In-App Toast Notification
+            if (activeChatIdRef.current !== chatId || !document.hasFocus()) {
+              if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+              setInAppToast({
+                id: message.id,
+                chatId,
+                senderName,
+                text: previewText,
+                avatar: senderAvatar,
+              });
+              toastTimerRef.current = setTimeout(() => {
+                setInAppToast(null);
+              }, 4500);
+            }
           }
         } else if (type === 'message:read') {
           const { chatId, readMessageIds } = data;
@@ -217,9 +280,13 @@ export default function App() {
               )
             );
 
-            // Auto clear typing state after 4 seconds if no new typing event or message arrives
+            // 4-second timeout safety per chat
+            if (typingTimeoutRefs.current[chatId]) {
+              clearTimeout(typingTimeoutRefs.current[chatId]);
+            }
+
             if (isTyping) {
-              setTimeout(() => {
+              typingTimeoutRefs.current[chatId] = setTimeout(() => {
                 setChats((prev) =>
                   (prev || []).map((c) =>
                     c.id === chatId && c.isTyping ? { ...c, isTyping: false, typingUserName: undefined } : c
@@ -237,12 +304,20 @@ export default function App() {
         } else if (type === 'presence:change') {
           const { userId, status, lastSeen } = data;
           setChats((prev) =>
-            (prev || []).map((c) => ({
-              ...c,
-              members: (c.members || []).map((m) =>
-                m.id === userId ? { ...m, status, lastSeen } : m
-              ),
-            }))
+            (prev || []).map((c) => {
+              const isMember = (c.memberIds || []).includes(userId) || (c.members || []).some((m) => m.id === userId);
+              if (!isMember) return c;
+
+              const hasMemberObj = (c.members || []).some((m) => m.id === userId);
+              const newMembers = hasMemberObj
+                ? (c.members || []).map((m) => (m.id === userId ? { ...m, status, lastSeen } : m))
+                : [...(c.members || []), { id: userId, name: 'User', username: '@user', avatar: '', status, lastSeen, isVerified: true }];
+
+              return {
+                ...c,
+                members: newMembers,
+              };
+            })
           );
         }
       },
@@ -669,6 +744,44 @@ export default function App() {
         <div className="bg-amber-950/80 border-b border-amber-900 text-amber-200 text-[11px] font-medium px-4 py-1 text-center flex items-center justify-center gap-2 z-50">
           <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
           <span>Realtime Connection Re-establishing... Retrying stream packet relay.</span>
+        </div>
+      )}
+
+      {/* Floating In-App Message Notification Toast */}
+      {inAppToast && (
+        <div
+          onClick={() => {
+            setActiveChatId(inAppToast.chatId);
+            setInAppToast(null);
+          }}
+          className="fixed top-4 right-4 z-[100] bg-slate-900/95 border border-emerald-500/50 text-white rounded-2xl p-3.5 shadow-2xl flex items-center space-x-3.5 max-w-sm w-[92vw] sm:w-auto cursor-pointer animate-in fade-in slide-in-from-top-4 duration-300 hover:border-emerald-400 transition-all backdrop-blur-md"
+        >
+          <div className="relative flex-shrink-0">
+            <img
+              src={getDisplayAvatar(inAppToast.senderName, inAppToast.avatar, inAppToast.chatId)}
+              alt={inAppToast.senderName}
+              className="w-11 h-11 rounded-full object-cover border border-emerald-500/40 bg-slate-800"
+            />
+            <span className="absolute -top-1 -right-1 bg-emerald-500 text-slate-950 p-1 rounded-full shadow-md">
+              <Bell className="w-3 h-3" />
+            </span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-2">
+              <h5 className="text-xs font-bold text-emerald-400 truncate">{inAppToast.senderName}</h5>
+              <span className="text-[10px] text-slate-400 font-mono flex-shrink-0">New Message</span>
+            </div>
+            <p className="text-xs text-slate-200 truncate mt-0.5">{inAppToast.text}</p>
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setInAppToast(null);
+            }}
+            className="p-1 text-slate-400 hover:text-white rounded-lg flex-shrink-0 hover:bg-slate-800"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 

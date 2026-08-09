@@ -297,13 +297,14 @@ export const apiSendPresence = async (status: 'online' | 'offline' | 'away') => 
   const token = getAuthToken();
   if (!token) return;
   try {
-    await fetch(`${API_BASE}/presence`, {
+    await fetch(`${API_BASE}/presence?token=${encodeURIComponent(token)}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, token }),
+      keepalive: true,
     });
   } catch {
     // ignore

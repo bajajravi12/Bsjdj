@@ -8,8 +8,8 @@ import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const currentFilename = typeof import.meta !== 'undefined' && import.meta.url ? fileURLToPath(import.meta.url) : (typeof __filename !== 'undefined' ? __filename : '');
+const currentDirname = typeof __dirname !== 'undefined' ? __dirname : (currentFilename ? path.dirname(currentFilename) : process.cwd());
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -170,9 +170,17 @@ setInterval(() => {
 // --- JWT AUTH MIDDLEWARE ---
 
 const authenticateJWT = (req: any, res: any, next: any) => {
+  let token = '';
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
+    token = authHeader.split(' ')[1];
+  } else if (req.query && req.query.token) {
+    token = String(req.query.token);
+  } else if (req.body && req.body.token) {
+    token = String(req.body.token);
+  }
+
+  if (token) {
     jwt.verify(token, JWT_SECRET, (err: any, decoded: any) => {
       if (err) {
         return res.status(401).json({ error: 'Unauthorized: Invalid token' });
@@ -371,10 +379,11 @@ app.get(['/api/realtime/stream', '/api/realtime'], (req, res) => {
   res.write(`data: ${JSON.stringify({ type: 'connected', clientId, userId, timestamp: new Date().toISOString() })}\n\n`);
 
   // Update presence status to online
+  const nowIso = new Date().toISOString();
   if (usersDb[userId]) {
     usersDb[userId].status = 'online';
-    usersDb[userId].lastSeen = 'Just now';
-    broadcastToAll('presence:change', { userId, status: 'online', lastSeen: 'Just now' });
+    usersDb[userId].lastSeen = nowIso;
+    broadcastToAll('presence:change', { userId, status: 'online', lastSeen: nowIso });
   }
 
   req.on('close', () => {
@@ -787,7 +796,7 @@ app.post('/api/chats/:chatId/typing', authenticateJWT, (req: any, res) => {
   const { isTyping } = req.body;
 
   const chat = chatsDb[chatId];
-  if (chat) {
+  if (chat && chat.memberIds.includes(currentUserId)) {
     broadcastToUsers(chat.memberIds, 'typing:change', {
       chatId,
       userId: currentUserId,
@@ -803,14 +812,16 @@ app.post('/api/chats/:chatId/typing', authenticateJWT, (req: any, res) => {
 app.post(['/api/presence', '/api/users/presence'], authenticateJWT, (req: any, res) => {
   const currentUserId = req.user.id;
   const { status } = req.body;
+  const nowIso = new Date().toISOString();
+  const newStatus = status === 'offline' ? 'offline' : 'online';
 
   if (usersDb[currentUserId]) {
-    usersDb[currentUserId].status = status || 'online';
-    usersDb[currentUserId].lastSeen = 'Just now';
-    broadcastToAll('presence:change', { userId: currentUserId, status: usersDb[currentUserId].status, lastSeen: 'Just now' });
+    usersDb[currentUserId].status = newStatus;
+    usersDb[currentUserId].lastSeen = nowIso;
+    broadcastToAll('presence:change', { userId: currentUserId, status: newStatus, lastSeen: nowIso });
   }
 
-  res.json({ success: true });
+  res.json({ success: true, status: newStatus, lastSeen: nowIso });
 });
 
 // 14. Full State Synchronization Endpoint (Offline Recovery)
@@ -889,7 +900,7 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(__dirname, 'dist');
+    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       if (req.path.startsWith('/api')) {

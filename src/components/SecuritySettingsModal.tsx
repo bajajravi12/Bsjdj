@@ -123,20 +123,58 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
             </div>
 
             {/* Notifications Toggle */}
-            <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <Bell className="w-4 h-4 text-emerald-400" />
-                <div>
-                  <h5 className="text-xs font-semibold text-white">Notifications & Sound</h5>
-                  <p className="text-[10px] text-slate-400">Audio alerts & message popups</p>
+            <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <Bell className="w-4 h-4 text-emerald-400" />
+                  <div>
+                    <h5 className="text-xs font-semibold text-white">Notifications & Sound</h5>
+                    <p className="text-[10px] text-slate-400">Audio alerts & in-app popups</p>
+                  </div>
                 </div>
+                <input
+                  type="checkbox"
+                  checked={currentSettings.notifications}
+                  onChange={(e) => updateSetting('notifications', e.target.checked)}
+                  className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                />
               </div>
-              <input
-                type="checkbox"
-                checked={currentSettings.notifications}
-                onChange={(e) => updateSetting('notifications', e.target.checked)}
-                className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
-              />
+
+              {/* System Web Notification Permission */}
+              {'Notification' in window && (
+                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                  <div className="text-[11px]">
+                    <span className="text-slate-300 font-medium block">Device Notifications</span>
+                    <span className="text-[10px] text-slate-500">
+                      {Notification.permission === 'granted'
+                        ? '🟢 System notifications enabled'
+                        : Notification.permission === 'denied'
+                        ? '🔴 Blocked in browser settings'
+                        : '🟡 Permission needed for push alerts'}
+                    </span>
+                  </div>
+                  {Notification.permission !== 'granted' && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const res = await Notification.requestPermission();
+                          if (res === 'granted') {
+                            new Notification('AARVI Messenger', {
+                              body: 'System notifications enabled on this device!',
+                            });
+                          }
+                          // Force re-render
+                          setCurrentSettings({ ...currentSettings });
+                        } catch {}
+                      }}
+                      className="px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-[11px] font-bold transition-all"
+                    >
+                      Enable Push
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* APK Download Button */}

@@ -96,24 +96,48 @@ function generateInitialsAvatarSvg(name: string, keyForColor?: string): string {
 }
 
 // Active Realtime SSE Streams
-let activeStreams: Array<{ writer: WritableStreamDefaultWriter<Uint8Array>; encoder: TextEncoder }> = [];
+let activeStreams: Array<{
+  writer: WritableStreamDefaultWriter<Uint8Array>;
+  encoder: TextEncoder;
+  userId?: string;
+}> = [];
 
-async function broadcastEvent(type: string, data: any) {
+async function broadcastEvent(type: string, data: any, targetUserIds?: string[]) {
   const jsonString = JSON.stringify({ type, data, timestamp: new Date().toISOString() });
   const payload = `data: ${jsonString}\n\n`;
   const encoder = new TextEncoder();
   const encoded = encoder.encode(payload);
 
   const remaining: typeof activeStreams = [];
+  const disconnectedUserIds = new Set<string>();
+
   for (const client of activeStreams) {
+    if (targetUserIds && client.userId && !targetUserIds.includes(client.userId)) {
+      remaining.push(client);
+      continue;
+    }
     try {
       await client.writer.write(encoded);
       remaining.push(client);
     } catch {
-      // Disconnected stream
+      if (client.userId) {
+        disconnectedUserIds.add(client.userId);
+      }
     }
   }
   activeStreams = remaining;
+
+  // For disconnected users, if they have no remaining active streams, update presence
+  for (const uid of disconnectedUserIds) {
+    const stillConnected = activeStreams.some((c) => c.userId === uid);
+    if (!stillConnected) {
+      const nowIso = new Date().toISOString();
+      if (usersDb[uid]) {
+        usersDb[uid].status = 'offline';
+        usersDb[uid].lastSeen = nowIso;
+      }
+    }
+  }
 }
 
 let tablesInitialized = false;
@@ -579,10 +603,17 @@ export default {
 
     // Helper: Authenticate JWT Token
     const authHeader = request.headers.get('Authorization') || request.headers.get('authorization');
-    let decodedUser: any = null;
+    let reqToken = '';
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7).trim();
-      decodedUser = await verifyJWT(token, jwtSecret);
+      reqToken = authHeader.substring(7).trim();
+    } else {
+      const urlObj = new URL(request.url);
+      reqToken = urlObj.searchParams.get('token') || '';
+    }
+
+    let decodedUser: any = null;
+    if (reqToken) {
+      decodedUser = await verifyJWT(reqToken, jwtSecret);
     }
 
     // API Routing
@@ -1127,34 +1158,55 @@ export default {
         const body: any = await request.json().catch(() => ({}));
         const { isTyping } = body;
 
-        broadcastEvent('typing:change', { 
-          chatId, 
-          userId: decodedUser.id, 
-          userName: decodedUser.name, 
-          isTyping: Boolean(isTyping) 
-        });
+        let chat: ServerChat | null = null;
+        if (env.DB) {
+          chat = await getD1ChatById(env.DB, chatId);
+        } else {
+          chat = chatsDb[chatId] || null;
+        }
+
+        if (chat && chat.memberIds.includes(decodedUser.id)) {
+          // CHAT ISOLATION: deliver only to members of this chat
+          broadcastEvent('typing:change', { 
+            chatId, 
+            userId: decodedUser.id, 
+            userName: decodedUser.name, 
+            isTyping: Boolean(isTyping) 
+          }, chat.memberIds);
+        }
+
         return jsonResponse({ success: true });
       }
 
       // 16. Presence Status Update
       if (pathname === '/api/presence' && request.method === 'POST') {
-        if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         const body: any = await request.json().catch(() => ({}));
+        let userToAuth = decodedUser;
+        if (!userToAuth && body.token) {
+          userToAuth = await verifyJWT(body.token, jwtSecret);
+        }
+        if (!userToAuth) return jsonResponse({ error: 'Unauthorized' }, 401);
+
         const { status } = body;
-        const currentUserId = decodedUser.id;
-        const newStatus = status || 'online';
+        const currentUserId = userToAuth.id;
+        const newStatus = status === 'offline' ? 'offline' : 'online';
         const lastSeen = new Date().toISOString();
+
+        if (usersDb[currentUserId]) {
+          usersDb[currentUserId].status = newStatus;
+          usersDb[currentUserId].lastSeen = lastSeen;
+        }
 
         if (env.DB) {
           try {
             await env.DB.prepare(
-              'UPDATE users SET status = ?, last_seen = ? WHERE id = ?'
-            ).bind(newStatus, lastSeen, currentUserId).run();
+              'UPDATE users SET status = ?, last_seen = ?, last_active_timestamp = ? WHERE id = ?'
+            ).bind(newStatus, lastSeen, Date.now(), currentUserId).run();
           } catch {}
         }
 
         broadcastEvent('presence:change', { userId: currentUserId, status: newStatus, lastSeen });
-        return jsonResponse({ success: true, status: newStatus });
+        return jsonResponse({ success: true, status: newStatus, lastSeen });
       }
 
       // 17. Full Sync
@@ -1200,10 +1252,26 @@ export default {
         const writer = writable.getWriter();
         const encoder = new TextEncoder();
 
-        activeStreams.push({ writer, encoder });
+        const currentUserId = decodedUser?.id;
+        activeStreams.push({ writer, encoder, userId: currentUserId });
 
         // Send initial connection event
         writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() })}\n\n`));
+
+        if (currentUserId) {
+          const nowIso = new Date().toISOString();
+          if (usersDb[currentUserId]) {
+            usersDb[currentUserId].status = 'online';
+            usersDb[currentUserId].lastSeen = nowIso;
+          }
+          if (env.DB) {
+            try {
+              env.DB.prepare('UPDATE users SET status = ?, last_seen = ?, last_active_timestamp = ? WHERE id = ?')
+                .bind('online', nowIso, Date.now(), currentUserId).run();
+            } catch {}
+          }
+          broadcastEvent('presence:change', { userId: currentUserId, status: 'online', lastSeen: nowIso });
+        }
 
         return new Response(readable, {
           headers: {
