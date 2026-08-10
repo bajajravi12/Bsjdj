@@ -131,18 +131,26 @@ export function getEffectiveUserStatus(user: ServerUser): { status: 'online' | '
     return { status: 'offline', lastSeen: new Date().toISOString() };
   }
   const now = Date.now();
-  const lastActive = user.lastActiveTimestamp || (user.lastSeen && !isNaN(new Date(user.lastSeen).getTime()) ? new Date(user.lastSeen).getTime() : 0);
+  let lastActive = user.lastActiveTimestamp || 0;
+  if (!lastActive && user.lastSeen) {
+    const parsed = new Date(user.lastSeen).getTime();
+    if (!isNaN(parsed)) {
+      lastActive = parsed;
+    }
+  }
+
   const isRecentlyActive = lastActive > 0 && (now - lastActive < PRESENCE_TIMEOUT_MS);
 
-  if (user.status === 'online' && isRecentlyActive) {
+  if (isRecentlyActive) {
+    const lastSeenIso = new Date(lastActive).toISOString();
     return {
       status: 'online',
-      lastSeen: user.lastSeen || new Date(lastActive).toISOString(),
+      lastSeen: lastSeenIso,
       lastActiveTimestamp: lastActive,
     };
   }
 
-  const lastSeenIso = lastActive > 0 ? new Date(lastActive).toISOString() : (user.lastSeen || new Date().toISOString());
+  const lastSeenIso = lastActive > 0 ? new Date(lastActive).toISOString() : (user.lastSeen && !isNaN(new Date(user.lastSeen).getTime()) ? new Date(user.lastSeen).toISOString() : new Date().toISOString());
   return {
     status: 'offline',
     lastSeen: lastSeenIso,
@@ -234,7 +242,26 @@ const authenticateJWT = (req: any, res: any, next: any) => {
       if (err) {
         return res.status(401).json({ error: 'Unauthorized: Invalid token' });
       }
-      req.user = usersDb[decoded.id] || decoded;
+      const user = usersDb[decoded.id] || decoded;
+      req.user = user;
+
+      if (usersDb[decoded.id]) {
+        const now = Date.now();
+        const nowIso = new Date(now).toISOString();
+        const u = usersDb[decoded.id];
+        const wasOffline = getEffectiveUserStatus(u).status === 'offline';
+
+        u.lastActiveTimestamp = now;
+        u.lastSeen = nowIso;
+        u.status = 'online';
+
+        if (wasOffline) {
+          const payload = { userId: u.id, status: 'online', lastSeen: nowIso };
+          broadcastToAll('presence:change', payload);
+          broadcastToAll('presence:update', payload);
+        }
+      }
+
       next();
     });
   } else {
@@ -349,14 +376,20 @@ app.post(['/api/auth/login', '/api/auth/signin'], (req, res) => {
       return res.status(401).json({ error: 'Invalid password. Please try again.' });
     }
 
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+
     user.status = 'online';
-    user.lastSeen = 'Just now';
+    user.lastActiveTimestamp = now;
+    user.lastSeen = nowIso;
 
     const token = jwt.sign({ id: user.id, username: user.username, name: user.name }, JWT_SECRET, {
       expiresIn: '30d',
     });
 
-    broadcastToAll('presence:change', { userId: user.id, status: 'online', lastSeen: 'Just now' });
+    const payload = { userId: user.id, status: 'online', lastSeen: nowIso };
+    broadcastToAll('presence:change', payload);
+    broadcastToAll('presence:update', payload);
 
     return res.json({
       success: true,
