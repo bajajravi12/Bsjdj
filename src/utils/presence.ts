@@ -5,6 +5,25 @@ export function formatLastSeen(status?: string, lastSeen?: string | number): {
   text: string;
   isOnline: boolean;
 } {
+  let date: Date | null = null;
+  if (lastSeen) {
+    if (typeof lastSeen === 'number') {
+      date = new Date(lastSeen);
+    } else if (typeof lastSeen === 'string' && lastSeen.toLowerCase() !== 'just now') {
+      date = parseUtcDate(lastSeen);
+    }
+  }
+
+  const now = new Date();
+
+  // If lastSeen timestamp is older than 45 seconds (45,000ms), override status to offline!
+  if (date) {
+    const timeSinceLastSeen = Math.max(0, now.getTime() - date.getTime());
+    if (timeSinceLastSeen >= 45000) {
+      status = 'offline';
+    }
+  }
+
   if (status === 'online') {
     return { text: 'Online', isOnline: true };
   }
@@ -17,7 +36,6 @@ export function formatLastSeen(status?: string, lastSeen?: string | number): {
     return { text: 'Last seen just now', isOnline: false };
   }
 
-  const date = parseUtcDate(lastSeen);
   if (!date) {
     return {
       text: typeof lastSeen === 'string' ? (lastSeen.startsWith('Last seen') ? lastSeen : `Last seen ${lastSeen}`) : 'Offline',
@@ -25,11 +43,9 @@ export function formatLastSeen(status?: string, lastSeen?: string | number): {
     };
   }
 
-  const now = new Date();
   const diffMs = Math.max(0, now.getTime() - date.getTime());
   const diffSecs = Math.floor(diffMs / 1000);
   const diffMins = Math.floor(diffSecs / 60);
-  const diffHours = Math.floor(diffMins / 60);
 
   if (diffSecs < 60) {
     return { text: 'Last seen just now', isOnline: false };

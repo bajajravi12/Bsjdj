@@ -311,6 +311,23 @@ export const apiSendPresence = async (status: 'online' | 'offline' | 'away') => 
   }
 };
 
+export const apiFetchPresence = async (userIds?: string[]) => {
+  const token = getAuthToken();
+  if (!token) return { presence: [] };
+  try {
+    const url = userIds && userIds.length > 0
+      ? `${API_BASE}/presence?userIds=${encodeURIComponent(userIds.join(','))}`
+      : `${API_BASE}/presence`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return { presence: [] };
+    return await parseResponseJson(res);
+  } catch {
+    return { presence: [] };
+  }
+};
+
 // Full Sync (Offline Catchup)
 export const apiSync = async (since?: string) => {
   const token = getAuthToken();

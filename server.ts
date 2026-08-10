@@ -924,6 +924,38 @@ app.post(['/api/presence', '/api/presence/heartbeat', '/api/users/presence'], au
   res.json({ success: true, status: newStatus, lastSeen: nowIso });
 });
 
+app.get('/api/presence', authenticateJWT, (req: any, res) => {
+  const currentUserId = req.user.id;
+  const userIdsParam = req.query.userIds as string;
+  let targetUserIds: string[] = [];
+
+  if (userIdsParam) {
+    targetUserIds = userIdsParam.split(',').map((id) => id.trim()).filter(Boolean);
+  } else {
+    const memberSet = new Set<string>();
+    Object.values(chatsDb).forEach((c) => {
+      if (c.memberIds.includes(currentUserId)) {
+        c.memberIds.forEach((id) => memberSet.add(id));
+      }
+    });
+    targetUserIds = Array.from(memberSet);
+  }
+
+  const presenceList = targetUserIds.map((id) => {
+    const user = usersDb[id];
+    if (!user) return null;
+    const eff = getEffectiveUserStatus(user);
+    return {
+      userId: id,
+      status: eff.status,
+      lastSeen: eff.lastSeen,
+      lastActiveTimestamp: eff.lastActiveTimestamp,
+    };
+  }).filter(Boolean);
+
+  res.json({ presence: presenceList });
+});
+
 // 14. Full State Synchronization Endpoint (Offline Recovery)
 app.get('/api/sync', authenticateJWT, (req: any, res) => {
   const currentUserId = req.user.id;
