@@ -120,13 +120,17 @@ export default function App() {
     chatsRef.current = chats;
   }, [chats]);
 
+  // Store session start timestamp to prevent historic sync messages from triggering alerts
+  const sessionStartTimeRef = useRef<number>(Date.now());
+  const handleSelectChatRef = useRef<(chatId: string) => void>(() => {});
+
   // 0. Register Service Worker & Handle SW Notification Clicks
   useEffect(() => {
     registerServiceWorker();
 
     const handleSwMessage = (event: MessageEvent) => {
       if (event.data && event.data.type === 'OPEN_CHAT' && event.data.chatId) {
-        setActiveChatId(event.data.chatId);
+        handleSelectChatRef.current(event.data.chatId);
       }
     };
 
@@ -135,14 +139,18 @@ export default function App() {
     }
 
     (window as any).__aarvi_openChat = (chatId: string) => {
-      setActiveChatId(chatId);
+      if (chatId) {
+        handleSelectChatRef.current(chatId);
+      }
     };
 
     try {
       const params = new URLSearchParams(window.location.search);
       const targetChatId = params.get('chatId');
       if (targetChatId) {
-        setActiveChatId(targetChatId);
+        setTimeout(() => {
+          handleSelectChatRef.current(targetChatId);
+        }, 100);
         window.history.replaceState({}, '', window.location.pathname);
       }
     } catch {}
@@ -485,24 +493,28 @@ export default function App() {
                   msg.senderId !== currentUser.id &&
                   !isMessageNotified(msg.id)
                 ) {
-                  const isViewingCurrentChat = activeChatIdRef.current === cId && document.hasFocus();
+                  const msgTime = new Date(msg.isoDate || msg.timestamp).getTime();
                   markMessageAsNotified(msg.id);
 
-                  if (!isViewingCurrentChat && appSettings.notifications !== false) {
-                    const currentChatList = chatsRef.current || [];
-                    const targetChat = currentChatList.find((c) => c.id === cId);
-                    const otherMember = (targetChat?.members || []).find((m) => m.id === msg.senderId);
-                    const senderName = msg.senderName || otherMember?.name || targetChat?.name || 'AARVI User';
-                    const senderAvatar = msg.senderAvatar || otherMember?.avatar || targetChat?.avatar;
-                    const previewText = msg.text || (msg.mediaType ? `[${msg.mediaType.toUpperCase()}]` : 'Sent a message');
+                  if (msgTime >= sessionStartTimeRef.current - 10000) {
+                    const isViewingCurrentChat = activeChatIdRef.current === cId && document.hasFocus();
 
-                    showNativeNotification(`AARVI: ${senderName}`, {
-                      body: previewText,
-                      senderName,
-                      avatarUrl: senderAvatar,
-                      chatId: cId,
-                      messageId: msg.id,
-                    });
+                    if (!isViewingCurrentChat && appSettings.notifications !== false) {
+                      const currentChatList = chatsRef.current || [];
+                      const targetChat = currentChatList.find((c) => c.id === cId);
+                      const otherMember = (targetChat?.members || []).find((m) => m.id === msg.senderId);
+                      const senderName = msg.senderName || otherMember?.name || targetChat?.name || 'AARVI User';
+                      const senderAvatar = msg.senderAvatar || otherMember?.avatar || targetChat?.avatar;
+                      const previewText = msg.text || (msg.mediaType ? `[${msg.mediaType.toUpperCase()}]` : 'Sent a message');
+
+                      showNativeNotification(`AARVI: ${senderName}`, {
+                        body: previewText,
+                        senderName,
+                        avatarUrl: senderAvatar,
+                        chatId: cId,
+                        messageId: msg.id,
+                      });
+                    }
                   }
                 }
               }
@@ -611,7 +623,7 @@ export default function App() {
     });
   };
 
-  // 6. Mobile Back Button (History API) Handler
+  // 6. Mobile Back Button (History API) Handler & Chat Selection
   const handleSelectChat = (chatId: string) => {
     setActiveChatId(chatId);
     if (window.history.state?.chatId !== chatId) {
@@ -633,6 +645,10 @@ export default function App() {
       })
       .catch(() => {});
   };
+
+  useEffect(() => {
+    handleSelectChatRef.current = handleSelectChat;
+  });
 
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {

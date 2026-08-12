@@ -1,11 +1,31 @@
 // Native Browser Notification & Service Worker Manager for AARVI
 
 let swRegistration: ServiceWorkerRegistration | null = null;
-const notifiedMessageIds = new Set<string>();
+
+// Load notified message IDs from sessionStorage to maintain duplicate prevention across tab reloads
+const initialNotifiedIds: string[] = (() => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const saved = sessionStorage.getItem('aarvi_notified_msg_ids');
+    if (saved) return JSON.parse(saved);
+  } catch {}
+  return [];
+})();
+
+const notifiedMessageIds = new Set<string>(initialNotifiedIds);
+
+function persistNotifiedIds() {
+  if (typeof window === 'undefined') return;
+  try {
+    const arr = Array.from(notifiedMessageIds).slice(-500);
+    sessionStorage.setItem('aarvi_notified_msg_ids', JSON.stringify(arr));
+  } catch {}
+}
 
 export function markMessageAsNotified(messageId: string) {
   if (messageId) {
     notifiedMessageIds.add(messageId);
+    persistNotifiedIds();
   }
 }
 
@@ -15,9 +35,11 @@ export function isMessageNotified(messageId: string): boolean {
 
 // Seed initial historic message IDs so loading chat history doesn't trigger alerts
 export function seedHistoricMessageIds(messageIds: string[]) {
+  if (!messageIds || !Array.isArray(messageIds)) return;
   messageIds.forEach((id) => {
     if (id) notifiedMessageIds.add(id);
   });
+  persistNotifiedIds();
 }
 
 // Convert VAPID base64url public key to Uint8Array for PushManager
@@ -63,12 +85,9 @@ export async function subscribePushManager(authToken?: string): Promise<PushSubs
     return null;
   }
 
+  // Only proceed if permission is already granted; do not prompt unprompted
   if (Notification.permission !== 'granted') {
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') {
-      console.warn('[AARVI Push] Notification permission not granted.');
-      return null;
-    }
+    return null;
   }
 
   try {
@@ -77,7 +96,10 @@ export async function subscribePushManager(authToken?: string): Promise<PushSubs
       reg = await registerServiceWorker();
     }
     if (!reg && 'serviceWorker' in navigator) {
-      reg = await navigator.serviceWorker.ready;
+      reg = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+      ]);
     }
     if (!reg) {
       console.warn('[AARVI Push] Service worker registration not available.');
@@ -147,7 +169,7 @@ export function getNotificationPermissionStatus(): 'granted' | 'denied' | 'defau
   return Notification.permission;
 }
 
-// Request Notification Permission from Browser and Subscribe to Web Push
+// Request Notification Permission from Browser via User Interaction and Subscribe to Web Push
 export async function requestNotificationPermission(authToken?: string): Promise<'granted' | 'denied' | 'default' | 'unsupported'> {
   if (typeof window === 'undefined' || !('Notification' in window)) {
     return 'unsupported';
@@ -160,7 +182,7 @@ export async function requestNotificationPermission(authToken?: string): Promise
         body: 'System notifications enabled! You will be notified when new messages arrive.',
         tag: 'aarvi-permission-granted',
       });
-      // Subscribe to PushManager automatically
+      // Subscribe to PushManager
       subscribePushManager(authToken).catch(() => {});
     }
     return permission;
@@ -195,6 +217,7 @@ export async function showNativeNotification(title: string, options: ShowNotific
       return false;
     }
     notifiedMessageIds.add(options.messageId);
+    persistNotifiedIds();
   }
 
   const notificationTag = options.tag || (options.chatId ? `aarvi-chat-${options.chatId}` : 'aarvi-msg');
@@ -216,7 +239,13 @@ export async function showNativeNotification(title: string, options: ShowNotific
   try {
     let reg = swRegistration;
     if (!reg && 'serviceWorker' in navigator) {
-      reg = await navigator.serviceWorker.getRegistration();
+      reg = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)),
+      ]);
+    }
+    if (!reg && 'serviceWorker' in navigator) {
+      reg = await navigator.serviceWorker.getRegistration('/');
     }
 
     if (reg && reg.showNotification) {
@@ -227,7 +256,7 @@ export async function showNativeNotification(title: string, options: ShowNotific
     console.warn('[AARVI] ServiceWorker showNotification failed, attempting fallback:', swErr);
   }
 
-  // 2. Fallback to standard Notification constructor
+  // 2. Fallback to standard Notification constructor (Desktop Chrome only)
   try {
     const notif = new Notification(title, notificationOptions);
     notif.onclick = () => {
@@ -240,8 +269,9 @@ export async function showNativeNotification(title: string, options: ShowNotific
     };
     return true;
   } catch (notifErr) {
-    console.error('[AARVI] Notification constructor fallback failed:', notifErr);
+    console.warn('[AARVI] Notification constructor fallback failed:', notifErr);
     return false;
   }
 }
+
 

@@ -15,11 +15,13 @@ self.addEventListener('notificationclick', (event) => {
   const chatId = event.notification.data?.chatId;
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clientList) => {
       // If an AARVI window/tab is already open, focus it and post a message
       for (const client of clientList) {
         if ('focus' in client) {
-          client.focus();
+          try {
+            await client.focus();
+          } catch {}
           if (chatId) {
             client.postMessage({ type: 'OPEN_CHAT', chatId });
           }
@@ -29,7 +31,7 @@ self.addEventListener('notificationclick', (event) => {
       // If no window is open, open a new window to AARVI
       if (self.clients.openWindow) {
         const targetUrl = chatId ? `/?chatId=${encodeURIComponent(chatId)}` : '/';
-        return self.clients.openWindow(targetUrl);
+        return await self.clients.openWindow(targetUrl);
       }
     })
   );
