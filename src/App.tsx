@@ -10,6 +10,14 @@ import { playSoundEffect } from './utils/audioEffects';
 import { getDisplayAvatar } from './utils/avatar';
 import { Bell, X } from 'lucide-react';
 import { 
+  registerServiceWorker, 
+  showNativeNotification, 
+  seedHistoricMessageIds,
+  markMessageAsNotified,
+  isMessageNotified,
+  subscribePushManager
+} from './services/notifications';
+import { 
   apiGetMe, 
   apiFetchChats, 
   apiFetchMessages, 
@@ -112,6 +120,41 @@ export default function App() {
     chatsRef.current = chats;
   }, [chats]);
 
+  // 0. Register Service Worker & Handle SW Notification Clicks
+  useEffect(() => {
+    registerServiceWorker();
+
+    const handleSwMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'OPEN_CHAT' && event.data.chatId) {
+        setActiveChatId(event.data.chatId);
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+    }
+
+    (window as any).__aarvi_openChat = (chatId: string) => {
+      setActiveChatId(chatId);
+    };
+
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const targetChatId = params.get('chatId');
+      if (targetChatId) {
+        setActiveChatId(targetChatId);
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    } catch {}
+
+    return () => {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+      }
+      delete (window as any).__aarvi_openChat;
+    };
+  }, []);
+
   // 1. Initial Authentication Check on Mount
   useEffect(() => {
     const token = getAuthToken();
@@ -143,6 +186,9 @@ export default function App() {
   useEffect(() => {
     if (!isLoggedIn || !currentUser) return;
 
+    // Automatically subscribe to Web PushManager if permission granted
+    subscribePushManager().catch(() => {});
+
     apiFetchChats().then((data) => {
       const fetchedChats = data.chats || [];
       setChats(fetchedChats);
@@ -151,6 +197,7 @@ export default function App() {
       fetchedChats.forEach((chat: Chat) => {
         apiFetchMessages(chat.id).then((mRes) => {
           if (mRes && mRes.messages) {
+            seedHistoricMessageIds(mRes.messages.map((m: Message) => m.id));
             setMessagesMap((prev) => ({
               ...prev,
               [chat.id]: mergeServerAndLocalMessages(prev[chat.id] || [], mRes.messages),
@@ -233,23 +280,23 @@ export default function App() {
             const senderAvatar = message.senderAvatar || otherMember?.avatar || targetChat?.avatar;
             const previewText = message.text || (message.mediaType ? `[${message.mediaType.toUpperCase()}]` : 'Sent a message');
 
-            // Native Browser Push Notification (Mobile & Laptop)
-            if ('Notification' in window && Notification.permission === 'granted') {
-              try {
-                const notif = new Notification(`AARVI: ${senderName}`, {
-                  body: previewText,
-                  icon: senderAvatar || '/icon.png',
-                  tag: `aarvi-chat-${chatId}`,
-                });
-                notif.onclick = () => {
-                  window.focus();
-                  setActiveChatId(chatId);
-                };
-              } catch {}
+            const isViewingCurrentChat = activeChatIdRef.current === chatId && document.hasFocus();
+
+            // Native Browser System Push Notification
+            if (!isViewingCurrentChat) {
+              showNativeNotification(`AARVI: ${senderName}`, {
+                body: previewText,
+                senderName,
+                avatarUrl: senderAvatar,
+                chatId,
+                messageId: message.id,
+              });
+            } else {
+              markMessageAsNotified(message.id);
             }
 
             // In-App Toast Notification
-            if (activeChatIdRef.current !== chatId || !document.hasFocus()) {
+            if (!isViewingCurrentChat) {
               if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
               setInAppToast({
                 id: message.id,
@@ -430,6 +477,37 @@ export default function App() {
           });
 
           if (syncRes.messagesMap) {
+            // Check for unnotified new messages from other senders (e.g. delivered while SSE was reconnecting)
+            for (const [cId, msgs] of Object.entries(syncRes.messagesMap)) {
+              const incomingMsgs = msgs as Message[];
+              for (const msg of incomingMsgs) {
+                if (
+                  msg.senderId !== currentUser.id &&
+                  !isMessageNotified(msg.id)
+                ) {
+                  const isViewingCurrentChat = activeChatIdRef.current === cId && document.hasFocus();
+                  markMessageAsNotified(msg.id);
+
+                  if (!isViewingCurrentChat && appSettings.notifications !== false) {
+                    const currentChatList = chatsRef.current || [];
+                    const targetChat = currentChatList.find((c) => c.id === cId);
+                    const otherMember = (targetChat?.members || []).find((m) => m.id === msg.senderId);
+                    const senderName = msg.senderName || otherMember?.name || targetChat?.name || 'AARVI User';
+                    const senderAvatar = msg.senderAvatar || otherMember?.avatar || targetChat?.avatar;
+                    const previewText = msg.text || (msg.mediaType ? `[${msg.mediaType.toUpperCase()}]` : 'Sent a message');
+
+                    showNativeNotification(`AARVI: ${senderName}`, {
+                      body: previewText,
+                      senderName,
+                      avatarUrl: senderAvatar,
+                      chatId: cId,
+                      messageId: msg.id,
+                    });
+                  }
+                }
+              }
+            }
+
             setMessagesMap((prevMap) => {
               let updated = false;
               const nextMap = { ...prevMap };

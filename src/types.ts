@@ -23,6 +23,7 @@ export interface Message {
   chatId: string;
   senderId: string;
   senderName: string;
+  senderAvatar?: string;
   text: string;
   timestamp: string;
   isoDate: string;

@@ -2,6 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { User, AppSettings } from '../types';
 import { getDisplayAvatar } from '../utils/avatar';
 import { 
+  requestNotificationPermission, 
+  getNotificationPermissionStatus 
+} from '../services/notifications';
+import { 
   ShieldCheck, 
   Key, 
   Lock, 
@@ -44,12 +48,24 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
   const [autoLockTimeout, setAutoLockTimeout] = useState('5');
 
   const [currentSettings, setCurrentSettings] = useState<AppSettings>(settings);
+  const [permissionState, setPermissionState] = useState(getNotificationPermissionStatus());
 
   useEffect(() => {
     setCurrentSettings(settings);
   }, [settings]);
 
+  useEffect(() => {
+    if (isOpen) {
+      setPermissionState(getNotificationPermissionStatus());
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
+
+  const handleEnablePush = async () => {
+    const res = await requestNotificationPermission();
+    setPermissionState(res);
+  };
 
   const updateSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     const updated = { ...currentSettings, [key]: value };
@@ -141,33 +157,22 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
               </div>
 
               {/* System Web Notification Permission */}
-              {'Notification' in window && (
+              {permissionState !== 'unsupported' && (
                 <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
                   <div className="text-[11px]">
                     <span className="text-slate-300 font-medium block">Device Notifications</span>
                     <span className="text-[10px] text-slate-500">
-                      {Notification.permission === 'granted'
+                      {permissionState === 'granted'
                         ? '🟢 System notifications enabled'
-                        : Notification.permission === 'denied'
+                        : permissionState === 'denied'
                         ? '🔴 Blocked in browser settings'
                         : '🟡 Permission needed for push alerts'}
                     </span>
                   </div>
-                  {Notification.permission !== 'granted' && (
+                  {permissionState === 'default' && (
                     <button
                       type="button"
-                      onClick={async () => {
-                        try {
-                          const res = await Notification.requestPermission();
-                          if (res === 'granted') {
-                            new Notification('AARVI Messenger', {
-                              body: 'System notifications enabled on this device!',
-                            });
-                          }
-                          // Force re-render
-                          setCurrentSettings({ ...currentSettings });
-                        } catch {}
-                      }}
+                      onClick={handleEnablePush}
                       className="px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-[11px] font-bold transition-all"
                     >
                       Enable Push

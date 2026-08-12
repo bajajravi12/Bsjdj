@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
+import webPush from 'web-push';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 
@@ -14,6 +15,17 @@ const currentDirname = typeof __dirname !== 'undefined' ? __dirname : (currentFi
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'aarvi-production-e2ee-jwt-secret-2026';
+
+// VAPID Web Push Keys Configuration
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BI_i_mvWL_HWGZ4dk-hodyqyi7bi5hR4hVIaHQDb3ZbEyE2oE2PVeAYy61D1F23EpOwGi-mzJk8sBbptgdB3dJQ';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'olBy0P3ldKvbfSnJFZPz9EbXmVBxIWZ-fLFQO1o4_u4';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@aarvi.app';
+
+try {
+  webPush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+} catch (err) {
+  console.warn('[Web Push] VAPID initialization warning:', err);
+}
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -122,6 +134,63 @@ const chatsDb: Record<string, ServerChat> = {};
 const messagesDb: Record<string, ServerMessage[]> = {};
 const readStatusDb: Record<string, Record<string, string[]>> = {}; // chatId -> userId -> readMessageIds
 const typingStatusDb: Record<string, Record<string, boolean>> = {}; // chatId -> userId -> isTyping
+
+export interface PushSubscriptionRecord {
+  id: string;
+  userId: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  createdAt: string;
+}
+
+const pushSubscriptionsDb: Record<string, PushSubscriptionRecord[]> = {}; // userId -> array of subscriptions
+
+async function sendWebPushToChatRecipients(chatId: string, senderId: string, message: ServerMessage) {
+  const chat = chatsDb[chatId];
+  if (!chat) return;
+
+  const recipientIds = chat.memberIds.filter((id) => id !== senderId);
+  const senderUser = usersDb[senderId];
+  const senderName = senderUser ? senderUser.name : message.senderName || 'AARVI User';
+
+  const payload = JSON.stringify({
+    title: `AARVI: ${senderName}`,
+    body: message.text || (message.mediaType ? `[${message.mediaType.toUpperCase()}]` : 'Sent a message'),
+    chatId: message.chatId,
+    messageId: message.id,
+    icon: senderUser?.avatar || '/icon.png',
+    tag: `aarvi-chat-${message.chatId}`,
+  });
+
+  for (const rId of recipientIds) {
+    const userSubs = pushSubscriptionsDb[rId] || [];
+    for (const sub of userSubs) {
+      const pushSubscription = {
+        endpoint: sub.endpoint,
+        keys: {
+          p256dh: sub.p256dh,
+          auth: sub.auth,
+        },
+      };
+
+      webPush.sendNotification(pushSubscription, payload, {
+        vapidDetails: {
+          subject: VAPID_SUBJECT,
+          publicKey: VAPID_PUBLIC_KEY,
+          privateKey: VAPID_PRIVATE_KEY,
+        },
+      }).catch((err) => {
+        if (err?.statusCode === 404 || err?.statusCode === 410) {
+          // Remove expired subscription
+          pushSubscriptionsDb[rId] = (pushSubscriptionsDb[rId] || []).filter((s) => s.endpoint !== sub.endpoint);
+        } else {
+          console.warn('[Web Push] Send error:', err?.message || err);
+        }
+      });
+    }
+  }
+}
 
 // PRESENCE TIMEOUT CONFIGURATION (45 seconds)
 const PRESENCE_TIMEOUT_MS = 45000;
@@ -446,6 +515,53 @@ app.get('/api/users/search', authenticateJWT, (req: any, res) => {
   res.json({ users: matches });
 });
 
+// 5.1 Push Notification VAPID Public Key Endpoint
+app.get('/api/push/vapid-key', (req, res) => {
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+// 5.2 Push Notification Subscribe Endpoint
+app.post('/api/push/subscribe', authenticateJWT, (req: any, res) => {
+  const userId = req.user.id;
+  const { subscription } = req.body;
+  if (!subscription || !subscription.endpoint || !subscription.keys) {
+    return res.status(400).json({ error: 'Invalid push subscription object' });
+  }
+
+  const { endpoint, keys } = subscription;
+  const { p256dh, auth } = keys;
+
+  if (!pushSubscriptionsDb[userId]) {
+    pushSubscriptionsDb[userId] = [];
+  }
+
+  const existing = pushSubscriptionsDb[userId].find((s) => s.endpoint === endpoint);
+  if (!existing) {
+    pushSubscriptionsDb[userId].push({
+      id: `sub-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      userId,
+      endpoint,
+      p256dh,
+      auth,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  res.json({ success: true, message: 'Push subscription persisted successfully' });
+});
+
+// 5.3 Push Notification Unsubscribe Endpoint
+app.post('/api/push/unsubscribe', authenticateJWT, (req: any, res) => {
+  const userId = req.user.id;
+  const { endpoint } = req.body;
+
+  if (endpoint && pushSubscriptionsDb[userId]) {
+    pushSubscriptionsDb[userId] = pushSubscriptionsDb[userId].filter((s) => s.endpoint !== endpoint);
+  }
+
+  res.json({ success: true, message: 'Unsubscribed successfully' });
+});
+
 // 6. Realtime SSE Stream Endpoint
 app.get(['/api/realtime/stream', '/api/realtime'], (req, res) => {
   const token = req.query.token as string;
@@ -697,6 +813,11 @@ app.post(['/api/messages', '/api/messages/send', '/api/messages/reply'], authent
 
   // Broadcast new message event to all chat members
   broadcastToUsers(chat.memberIds, 'message:new', { message: newMsg, chatId });
+
+  // Deliver Real Web Push Notification to offline/background chat recipients
+  sendWebPushToChatRecipients(chatId, currentUserId, newMsg).catch((err) => {
+    console.error('[Web Push] Error triggering push notification:', err);
+  });
 
   // Return ACK to sender
   res.status(201).json({ success: true, message: newMsg, ackTimestamp: new Date().toISOString() });
@@ -1073,6 +1194,21 @@ app.post('/api/generate', async (req, res) => {
     console.error('API generate error:', err);
     return res.status(500).json({ error: err?.message || 'Failed to generate response' });
   }
+});
+
+// Service Worker route with proper JS headers
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  const swPath = path.join(process.cwd(), 'public', 'sw.js');
+  const distSwPath = path.join(process.cwd(), 'dist', 'sw.js');
+  if (require('fs').existsSync(swPath)) {
+    return res.sendFile(swPath);
+  }
+  if (require('fs').existsSync(distSwPath)) {
+    return res.sendFile(distSwPath);
+  }
+  return res.status(404).send('// Service Worker not found');
 });
 
 // Vite Middleware & Static Assets Handler

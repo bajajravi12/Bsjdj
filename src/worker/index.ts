@@ -1,12 +1,20 @@
 // Cloudflare Worker Handler for AARVI E2EE Messenger
+import webPush from 'web-push';
 
 export interface Env {
   DB?: any;
   JWT_SECRET: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
   ASSETS?: {
     fetch: (request: Request) => Promise<Response>;
   };
 }
+
+const DEFAULT_VAPID_PUBLIC_KEY = 'BI_i_mvWL_HWGZ4dk-hodyqyi7bi5hR4hVIaHQDb3ZbEyE2oE2PVeAYy61D1F23EpOwGi-mzJk8sBbptgdB3dJQ';
+const DEFAULT_VAPID_PRIVATE_KEY = 'olBy0P3ldKvbfSnJFZPz9EbXmVBxIWZ-fLFQO1o4_u4';
+const DEFAULT_VAPID_SUBJECT = 'mailto:admin@aarvi.app';
 
 export interface ServerUser {
   id: string;
@@ -193,11 +201,137 @@ async function ensureTables(db: any) {
         reactions_json TEXT,
         is_encrypted INTEGER DEFAULT 1,
         is_edited INTEGER DEFAULT 0
+      );`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, endpoint)
       );`)
     ]);
     tablesInitialized = true;
   } catch (err) {
     console.error('Failed to initialize D1 tables:', err);
+  }
+}
+
+// In-Memory Push Subscriptions Cache
+const pushSubscriptionsDb: Record<string, Array<{ id: string; userId: string; endpoint: string; p256dh: string; auth: string; createdAt: string }>> = {};
+
+async function saveWorkerPushSubscription(db: any, userId: string, endpoint: string, p256dh: string, auth: string) {
+  if (!pushSubscriptionsDb[userId]) {
+    pushSubscriptionsDb[userId] = [];
+  }
+  const existing = pushSubscriptionsDb[userId].find((s) => s.endpoint === endpoint);
+  if (!existing) {
+    pushSubscriptionsDb[userId].push({
+      id: `sub-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      userId,
+      endpoint,
+      p256dh,
+      auth,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  if (db) {
+    try {
+      const id = `sub-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      await db.prepare(`
+        INSERT OR REPLACE INTO push_subscriptions (id, user_id, endpoint, p256dh, auth)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(id, userId, endpoint, p256dh, auth).run();
+    } catch (e) {
+      console.error('Failed to save push subscription in D1:', e);
+    }
+  }
+}
+
+async function getWorkerPushSubscriptionsForUser(db: any, userId: string): Promise<Array<{ endpoint: string; p256dh: string; auth: string }>> {
+  const result: Array<{ endpoint: string; p256dh: string; auth: string }> = [];
+
+  if (pushSubscriptionsDb[userId]) {
+    for (const s of pushSubscriptionsDb[userId]) {
+      result.push({ endpoint: s.endpoint, p256dh: s.p256dh, auth: s.auth });
+    }
+  }
+
+  if (db) {
+    try {
+      const rows: any = await db.prepare('SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').bind(userId).all();
+      if (rows && rows.results) {
+        for (const r of rows.results) {
+          if (!result.some((s) => s.endpoint === r.endpoint)) {
+            result.push({ endpoint: r.endpoint, p256dh: r.p256dh, auth: r.auth });
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Failed to query push subscriptions from D1:', e);
+    }
+  }
+
+  return result;
+}
+
+async function sendWorkerWebPushToRecipients(env: Env, chatId: string, senderId: string, message: ServerMessage) {
+  const chat = env.DB ? await getD1ChatById(env.DB, chatId) : chatsDb[chatId];
+  if (!chat) return;
+
+  const recipientIds = chat.memberIds.filter((id) => id !== senderId);
+  const senderUser = env.DB ? await getFullUser(env.DB, senderId) : usersDb[senderId];
+  const senderName = senderUser ? senderUser.name : message.senderName || 'AARVI User';
+
+  const vapidPublic = env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
+  const vapidPrivate = env.VAPID_PRIVATE_KEY || DEFAULT_VAPID_PRIVATE_KEY;
+  const vapidSubject = env.VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT;
+
+  const payload = JSON.stringify({
+    title: `AARVI: ${senderName}`,
+    body: message.text || (message.mediaType ? `[${message.mediaType.toUpperCase()}]` : 'Sent a message'),
+    chatId: message.chatId,
+    messageId: message.id,
+    icon: senderUser?.avatar || '/icon.png',
+    tag: `aarvi-chat-${message.chatId}`,
+  });
+
+  for (const rId of recipientIds) {
+    const subs = await getWorkerPushSubscriptionsForUser(env.DB, rId);
+    for (const sub of subs) {
+      try {
+        await webPush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: {
+              p256dh: sub.p256dh,
+              auth: sub.auth,
+            },
+          },
+          payload,
+          {
+            vapidDetails: {
+              subject: vapidSubject,
+              publicKey: vapidPublic,
+              privateKey: vapidPrivate,
+            },
+          }
+        );
+      } catch (err: any) {
+        if (err?.statusCode === 404 || err?.statusCode === 410) {
+          if (env.DB) {
+            env.DB.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').bind(sub.endpoint).run().catch(() => {});
+          }
+          if (pushSubscriptionsDb[rId]) {
+            pushSubscriptionsDb[rId] = pushSubscriptionsDb[rId].filter((s) => s.endpoint !== sub.endpoint);
+          }
+        } else {
+          console.warn('[Worker Push] Send push error:', err?.message || err);
+        }
+      }
+    }
   }
 }
 
@@ -809,6 +943,43 @@ export default {
         return jsonResponse({ users: matches });
       }
 
+      // 5.1 Push Notification VAPID Public Key Endpoint
+      if (pathname === '/api/push/vapid-key' && request.method === 'GET') {
+        const publicKey = env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
+        return jsonResponse({ publicKey });
+      }
+
+      // 5.2 Push Notification Subscribe Endpoint
+      if (pathname === '/api/push/subscribe' && request.method === 'POST') {
+        if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const body: any = await request.json().catch(() => ({}));
+        const { subscription } = body;
+        if (!subscription || !subscription.endpoint || !subscription.keys) {
+          return jsonResponse({ error: 'Invalid push subscription object' }, 400);
+        }
+        const { endpoint, keys } = subscription;
+        const { p256dh, auth } = keys;
+
+        await saveWorkerPushSubscription(env.DB, decodedUser.id, endpoint, p256dh, auth);
+        return jsonResponse({ success: true, message: 'Push subscription persisted' });
+      }
+
+      // 5.3 Push Notification Unsubscribe Endpoint
+      if (pathname === '/api/push/unsubscribe' && request.method === 'POST') {
+        if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const body: any = await request.json().catch(() => ({}));
+        const { endpoint } = body;
+        if (endpoint) {
+          if (env.DB) {
+            await env.DB.prepare('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?').bind(decodedUser.id, endpoint).run().catch(() => {});
+          }
+          if (pushSubscriptionsDb[decodedUser.id]) {
+            pushSubscriptionsDb[decodedUser.id] = pushSubscriptionsDb[decodedUser.id].filter((s) => s.endpoint !== endpoint);
+          }
+        }
+        return jsonResponse({ success: true, message: 'Unsubscribed successfully' });
+      }
+
       // 6. Get All Chats
       if (pathname === '/api/chats' && request.method === 'GET') {
         if (!decodedUser) {
@@ -1014,6 +1185,11 @@ export default {
         }
 
         broadcastEvent('message:new', { message: newMsg, chatId });
+
+        // Trigger real Web Push notification to offline/background subscribers
+        sendWorkerWebPushToRecipients(env, chatId, currentUserId, newMsg).catch((err) => {
+          console.error('[Worker Push] Error sending web push:', err);
+        });
 
         return jsonResponse({ success: true, message: newMsg, ackTimestamp: new Date().toISOString() }, 201);
       }
@@ -1284,6 +1460,73 @@ export default {
       }
 
       return jsonResponse({ error: 'Endpoint not found' }, 404);
+    }
+
+    // Serve Service Worker for PWA and Push Notifications
+    if (pathname === '/sw.js') {
+      const swCode = `// AARVI Production Messenger Service Worker for Push Notifications and PWA
+const CACHE_NAME = 'aarvi-messenger-v1';
+
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const chatId = event.notification.data?.chatId;
+
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ('focus' in client) {
+          client.focus();
+          if (chatId) {
+            client.postMessage({ type: 'OPEN_CHAT', chatId });
+          }
+          return;
+        }
+      }
+      if (self.clients.openWindow) {
+        const targetUrl = chatId ? '/?chatId=' + encodeURIComponent(chatId) : '/';
+        return self.clients.openWindow(targetUrl);
+      }
+    })
+  );
+});
+
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  try {
+    const data = event.data.json();
+    const title = data.title || 'AARVI Messenger';
+    const options = {
+      body: data.body || 'New encrypted message received',
+      icon: data.icon || '/icon.png',
+      badge: '/icon.png',
+      tag: data.tag || (data.chatId ? 'aarvi-chat-' + data.chatId : 'aarvi-msg'),
+      data: {
+        chatId: data.chatId,
+        messageId: data.messageId,
+      },
+      vibrate: [100, 50, 100],
+    };
+    event.waitUntil(self.registration.showNotification(title, options));
+  } catch (e) {
+    console.error('[SW] Push payload parse error:', e);
+  }
+});`;
+
+      return new Response(swCode, {
+        headers: {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Access-Control-Allow-Origin': '*',
+        },
+      });
     }
 
     // Serve Static Frontend Assets in Production Worker
