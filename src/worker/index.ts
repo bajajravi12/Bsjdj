@@ -1462,17 +1462,153 @@ export default {
       return jsonResponse({ error: 'Endpoint not found' }, 404);
     }
 
+    // Serve Manifest for PWA Standalone App
+    if (pathname === '/manifest.json' || pathname === '/manifest.webmanifest') {
+      const manifestJson = JSON.stringify({
+        name: 'AARVI',
+        short_name: 'AARVI',
+        start_url: '/',
+        scope: '/',
+        display: 'standalone',
+        orientation: 'portrait-primary',
+        description: 'AARVI Secure Messenger',
+        theme_color: '#0f172a',
+        background_color: '#020617',
+        categories: ['social', 'messaging', 'utilities'],
+        icons: [
+          {
+            src: '/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: '/maskable-icon.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
+          },
+          {
+            src: '/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any'
+          }
+        ]
+      }, null, 2);
+
+      return new Response(manifestJson, {
+        headers: {
+          'Content-Type': 'application/manifest+json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'public, max-age=3600',
+        },
+      });
+    }
+
     // Serve Service Worker for PWA and Push Notifications
     if (pathname === '/sw.js') {
-      const swCode = `// AARVI Production Messenger Service Worker for Push Notifications and PWA
-const CACHE_NAME = 'aarvi-messenger-v1';
+      const swCode = `// AARVI Production Messenger Service Worker for Push Notifications, PWA Standalone Launch & Offline Caching
+const CACHE_NAME = 'aarvi-messenger-v2';
+
+const PRECACHE_ASSETS = [
+  '/',
+  '/index.html',
+  '/manifest.webmanifest',
+  '/icon.svg',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/maskable-icon.png'
+];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.addAll(PRECACHE_ASSETS).catch((err) => {
+        console.warn('[SW] Precache partial error (non-fatal):', err);
+      });
+    })
+  );
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    Promise.all([
+      self.clients.claim(),
+      caches.keys().then((cacheNames) => {
+        return Promise.all(
+          cacheNames.map((cacheName) => {
+            if (cacheName !== CACHE_NAME) {
+              console.log('[SW] Purging obsolete cache:', cacheName);
+              return caches.delete(cacheName);
+            }
+          })
+        );
+      })
+    ])
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  const request = event.request;
+  const url = new URL(request.url);
+
+  if (
+    request.method !== 'GET' ||
+    url.pathname.startsWith('/api') ||
+    url.pathname.includes('/api/') ||
+    url.protocol === 'ws:' ||
+    url.protocol === 'wss:'
+  ) {
+    return;
+  }
+
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const copy = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put('/', copy));
+          }
+          return networkResponse;
+        })
+        .catch(async () => {
+          const cache = await caches.open(CACHE_NAME);
+          const cachedIndex = await cache.match('/');
+          if (cachedIndex) return cachedIndex;
+          const cachedReq = await cache.match(request);
+          return cachedReq || new Response('AARVI Offline Mode', { status: 503, headers: { 'Content-Type': 'text/html' } });
+        })
+    );
+    return;
+  }
+
+  if (
+    url.pathname.startsWith('/assets/') ||
+    url.pathname.endsWith('.js') ||
+    url.pathname.endsWith('.css') ||
+    url.pathname.endsWith('.png') ||
+    url.pathname.endsWith('.svg') ||
+    url.pathname.endsWith('.json') ||
+    url.pathname.endsWith('.webmanifest')
+  ) {
+    event.respondWith(
+      caches.match(request).then((cachedResponse) => {
+        const fetchPromise = fetch(request).then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+            const responseToCache = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseToCache));
+          }
+          return networkResponse;
+        }).catch(() => cachedResponse);
+
+        return cachedResponse || fetchPromise;
+      })
+    );
+    return;
+  }
 });
 
 self.addEventListener('notificationclick', (event) => {
@@ -1507,8 +1643,8 @@ self.addEventListener('push', (event) => {
     const title = data.title || 'AARVI Messenger';
     const options = {
       body: data.body || 'New encrypted message received',
-      icon: data.icon || '/icon.png',
-      badge: '/icon.png',
+      icon: data.icon || '/icon-192.png',
+      badge: '/icon-192.png',
       tag: data.tag || (data.chatId ? 'aarvi-chat-' + data.chatId : 'aarvi-msg'),
       data: {
         chatId: data.chatId,
@@ -1525,6 +1661,7 @@ self.addEventListener('push', (event) => {
       return new Response(swCode, {
         headers: {
           'Content-Type': 'application/javascript; charset=utf-8',
+          'Service-Worker-Allowed': '/',
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Access-Control-Allow-Origin': '*',
         },

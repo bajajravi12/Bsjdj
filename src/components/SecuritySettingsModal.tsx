@@ -182,11 +182,11 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
               )}
             </div>
 
-            {/* APK Download Button */}
+            {/* PWA App Install Button */}
             {Boolean(getApkDownloadUrl()) && (
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
-                  Android Application
+                  Application Installation (PWA)
                 </label>
                 <ApkDownloadButton variant="secondary" />
               </div>

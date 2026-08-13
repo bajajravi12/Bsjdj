@@ -1198,7 +1198,8 @@ app.post('/api/generate', async (req, res) => {
 
 // Service Worker route with proper JS headers
 app.get('/sw.js', (req, res) => {
-  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Service-Worker-Allowed', '/');
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const swPath = path.join(process.cwd(), 'public', 'sw.js');
   const distSwPath = path.join(process.cwd(), 'dist', 'sw.js');
@@ -1209,6 +1210,22 @@ app.get('/sw.js', (req, res) => {
     return res.sendFile(distSwPath);
   }
   return res.status(404).send('// Service Worker not found');
+});
+
+// PWA Manifest routes
+app.get(['/manifest.webmanifest', '/manifest.json'], (req, res) => {
+  res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  const manifestPath = path.join(process.cwd(), 'public', 'manifest.webmanifest');
+  const distManifestPath = path.join(process.cwd(), 'dist', 'manifest.webmanifest');
+  if (require('fs').existsSync(manifestPath)) {
+    return res.sendFile(manifestPath);
+  }
+  if (require('fs').existsSync(distManifestPath)) {
+    return res.sendFile(distManifestPath);
+  }
+  return res.status(404).json({ error: 'Manifest not found' });
 });
 
 // Vite Middleware & Static Assets Handler
