@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
@@ -1203,10 +1204,10 @@ app.get('/sw.js', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const swPath = path.join(process.cwd(), 'public', 'sw.js');
   const distSwPath = path.join(process.cwd(), 'dist', 'sw.js');
-  if (require('fs').existsSync(swPath)) {
+  if (fs.existsSync(swPath)) {
     return res.sendFile(swPath);
   }
-  if (require('fs').existsSync(distSwPath)) {
+  if (fs.existsSync(distSwPath)) {
     return res.sendFile(distSwPath);
   }
   return res.status(404).send('// Service Worker not found');
@@ -1219,10 +1220,10 @@ app.get(['/manifest.webmanifest', '/manifest.json'], (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=3600');
   const manifestPath = path.join(process.cwd(), 'public', 'manifest.webmanifest');
   const distManifestPath = path.join(process.cwd(), 'dist', 'manifest.webmanifest');
-  if (require('fs').existsSync(manifestPath)) {
+  if (fs.existsSync(manifestPath)) {
     return res.sendFile(manifestPath);
   }
-  if (require('fs').existsSync(distManifestPath)) {
+  if (fs.existsSync(distManifestPath)) {
     return res.sendFile(distManifestPath);
   }
   return res.status(404).json({ error: 'Manifest not found' });
