@@ -188,6 +188,11 @@ export default function App() {
   const sessionStartTimeRef =
     useRef<number>(Date.now());
 
+  // Prevents overlapping apiSync() calls when SSE reconnect,
+  // the 30s interval, and a focus/visibility event fire close together.
+  const isSyncingRef =
+    useRef<boolean>(false);
+
   const handleSelectChatRef =
     useRef<(chatId: string) => void>(() => {});
 
@@ -939,6 +944,11 @@ export default function App() {
               'online'
             ).catch(() => {});
 
+            if (isSyncingRef.current) {
+              return;
+            }
+            isSyncingRef.current = true;
+
             apiSync(
               lastSyncTimestampRef.current
             )
@@ -994,7 +1004,10 @@ export default function App() {
                   }
                 }
               )
-              .catch(() => {});
+              .catch(() => {})
+              .finally(() => {
+                isSyncingRef.current = false;
+              });
           }
         }
       );
@@ -1021,6 +1034,10 @@ export default function App() {
 
     const pollSync =
       async () => {
+        if (isSyncingRef.current) {
+          return;
+        }
+        isSyncingRef.current = true;
         try {
           const syncRes =
             await apiSync(
@@ -1228,7 +1245,10 @@ export default function App() {
               syncRes.timestamp;
           }
 
-        } catch {}
+        } catch {
+        } finally {
+          isSyncingRef.current = false;
+        }
       };
 
     /*
