@@ -210,7 +210,13 @@ async function ensureTables(db: any) {
         auth TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(user_id, endpoint)
-      );`)
+      );`),
+      // --- Indexes added to fix D1 free-tier read-limit exhaustion ---
+      // Without these, every "WHERE chat_id = ?" query did a full table scan.
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_messages_chat_id_iso ON messages(chat_id, iso_date);`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_messages_chat_status ON messages(chat_id, status);`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_members_user ON chat_members(user_id);`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_members_chat ON chat_members(chat_id);`)
     ]);
     tablesInitialized = true;
   } catch (err) {
@@ -634,6 +640,45 @@ async function getD1MessagesForChat(db: any, chatId: string): Promise<ServerMess
     return msgs;
   } catch (err) {
     console.error('getD1MessagesForChat error:', err);
+    return [];
+  }
+}
+
+// Incremental fetch used by /api/sync — only pulls messages newer than
+// `since` instead of re-reading up to 500 rows per chat on every call.
+async function getD1NewMessagesForChat(db: any, chatId: string, since?: string): Promise<ServerMessage[]> {
+  if (!db) return [];
+  try {
+    const rows: any = since
+      ? await db.prepare(
+          'SELECT * FROM messages WHERE chat_id = ? AND iso_date > ? ORDER BY iso_date ASC LIMIT 500'
+        ).bind(chatId, since).all()
+      : await db.prepare(
+          'SELECT * FROM messages WHERE chat_id = ? ORDER BY iso_date ASC LIMIT 500'
+        ).bind(chatId).all();
+
+    if (!rows || !rows.results) return [];
+
+    return rows.results.map((m: any) => ({
+      id: m.id,
+      clientMsgId: m.client_msg_id,
+      chatId: m.chat_id,
+      senderId: m.sender_id,
+      senderName: m.sender_name,
+      text: m.text,
+      timestamp: m.timestamp,
+      isoDate: m.iso_date,
+      status: m.status || 'sent',
+      mediaUrl: m.media_url,
+      mediaType: m.media_type,
+      replyToId: m.reply_to_id,
+      replyToText: m.reply_to_text,
+      reactions: m.reactions_json ? JSON.parse(m.reactions_json) : [],
+      isEncrypted: Boolean(m.is_encrypted),
+      isEdited: Boolean(m.is_edited),
+    }));
+  } catch (err) {
+    console.error('getD1NewMessagesForChat error:', err);
     return [];
   }
 }
@@ -1385,10 +1430,11 @@ export default {
         return jsonResponse({ success: true, status: newStatus, lastSeen });
       }
 
-      // 17. Full Sync
+      // 17. Full Sync (now incremental — only pulls NEW messages since last sync)
       if (pathname === '/api/sync' && request.method === 'GET') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         const currentUserId = decodedUser.id;
+        const since = url.searchParams.get('since') || undefined;
 
         let userChats: any[] = [];
         const userMessagesMap: Record<string, ServerMessage[]> = {};
@@ -1396,12 +1442,17 @@ export default {
         if (env.DB) {
           userChats = await getD1ChatsForUser(env.DB, currentUserId);
           for (const c of userChats) {
-            userMessagesMap[c.id] = await getD1MessagesForChat(env.DB, c.id);
+            const newMsgs = await getD1NewMessagesForChat(env.DB, c.id, since);
+            if (newMsgs.length > 0) {
+              userMessagesMap[c.id] = newMsgs;
+            }
           }
         } else {
           userChats = Object.values(chatsDb).filter((c) => c.memberIds.includes(currentUserId));
-          for (const c of userChats) {
-            userMessagesMap[c.id] = messagesDb[c.id] || [];
+          if (!since) {
+            for (const c of userChats) {
+              userMessagesMap[c.id] = messagesDb[c.id] || [];
+            }
           }
         }
 
