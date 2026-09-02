@@ -9,108 +9,187 @@ import { ImageLightboxModal } from './components/ImageLightboxModal';
 import { playSoundEffect } from './utils/audioEffects';
 import { getDisplayAvatar } from './utils/avatar';
 import { Bell, X } from 'lucide-react';
-import { 
-  registerServiceWorker, 
-  showNativeNotification, 
+
+import {
+  registerServiceWorker,
+  showNativeNotification,
   seedHistoricMessageIds,
   markMessageAsNotified,
   isMessageNotified,
   subscribePushManager
 } from './services/notifications';
-import { 
-  apiGetMe, 
-  apiFetchChats, 
-  apiFetchMessages, 
-  apiSendMessage, 
+
+import {
+  apiGetMe,
+  apiFetchChats,
+  apiFetchMessages,
+  apiSendMessage,
   apiEditMessage,
   apiDeleteMessage,
   apiReactToMessage,
   apiPinMessage,
   apiSendPresence,
-  subscribeRealtimeEvents, 
-  apiSync, 
-  clearAuthToken, 
-  getAuthToken 
+  subscribeRealtimeEvents,
+  apiSync,
+  clearAuthToken,
+  getAuthToken
 } from './services/api';
 
-// Helper to safely merge server messages with local state, preserving in-flight optimistic messages
-function mergeServerAndLocalMessages(existingMsgs: Message[] = [], incomingMsgs: Message[] = []): Message[] {
-  const serverIds = new Set(incomingMsgs.map((m) => m.id));
-  const serverClientIds = new Set(incomingMsgs.map((m) => m.clientMsgId).filter(Boolean) as string[]);
+/**
+ * Safely merges incremental server updates with local messages.
+ *
+ * Important:
+ * - Existing confirmed messages are preserved.
+ * - Optimistic messages are replaced by their server-confirmed version.
+ * - Incremental sync responses cannot wipe old messages.
+ */
+function mergeServerAndLocalMessages(
+  existingMsgs: Message[] = [],
+  incomingMsgs: Message[] = []
+): Message[] {
+  const messagesById = new Map<string, Message>();
+  const clientIdToMessageId = new Map<string, string>();
 
-  const existingMap = new Map<string, Message>();
-  for (const m of existingMsgs) {
-    existingMap.set(m.id, m);
-    if (m.clientMsgId) existingMap.set(m.clientMsgId, m);
+  // Preserve existing local messages.
+  for (const message of existingMsgs) {
+    messagesById.set(message.id, message);
+
+    if (message.clientMsgId) {
+      clientIdToMessageId.set(message.clientMsgId, message.id);
+    }
   }
 
-  // 1. Process server messages, enriching with existing local timestamps
-  const mergedServer = incomingMsgs.map((inc) => {
-    const ext = existingMap.get(inc.id) || (inc.clientMsgId ? existingMap.get(inc.clientMsgId) : undefined);
-    if (ext) {
-      return {
-        ...inc,
-        isoDate: ext.isoDate || inc.isoDate,
-        timestamp: ext.timestamp || inc.timestamp,
-      };
+  // Merge incoming server messages.
+  for (const incoming of incomingMsgs) {
+    let existing = messagesById.get(incoming.id);
+
+    // Match server message with optimistic/local message.
+    if (!existing && incoming.clientMsgId) {
+      const localMessageId =
+        clientIdToMessageId.get(incoming.clientMsgId);
+
+      if (localMessageId) {
+        existing = messagesById.get(localMessageId);
+
+        // Remove optimistic message once server confirmation exists.
+        if (localMessageId !== incoming.id) {
+          messagesById.delete(localMessageId);
+        }
+      }
     }
-    return inc;
-  });
 
-  // 2. Preserve any in-flight / optimistic messages that server has not yet acknowledged
-  const pendingMsgs = existingMsgs.filter((m) => {
-    const isPending = m.status === 'sending' || m.id.startsWith('cmsg-');
-    if (!isPending) return false;
-    const matchesServerId = serverIds.has(m.id);
-    const matchesServerClientId = m.clientMsgId ? serverClientIds.has(m.clientMsgId) : false;
-    return !matchesServerId && !matchesServerClientId;
-  });
+    if (existing) {
+      messagesById.set(incoming.id, {
+        ...existing,
+        ...incoming,
 
-  return [...mergedServer, ...pendingMsgs];
+        // Preserve the original local timestamp.
+        isoDate: existing.isoDate || incoming.isoDate,
+        timestamp: existing.timestamp || incoming.timestamp
+      });
+    } else {
+      messagesById.set(incoming.id, incoming);
+    }
+
+    if (incoming.clientMsgId) {
+      clientIdToMessageId.set(
+        incoming.clientMsgId,
+        incoming.id
+      );
+    }
+  }
+
+  return Array.from(messagesById.values()).sort((a, b) => {
+    const aTime = new Date(
+      a.isoDate || a.timestamp
+    ).getTime();
+
+    const bTime = new Date(
+      b.isoDate || b.timestamp
+    ).getTime();
+
+    return aTime - bTime;
+  });
 }
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
-  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [currentUser, setCurrentUser] =
+    useState<User | null>(null);
 
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [messagesMap, setMessagesMap] = useState<Record<string, Message[]>>(() => {
-    try {
-      const cached = localStorage.getItem('aarvi_messages_cache');
-      if (cached) return JSON.parse(cached);
-    } catch {}
-    return {};
-  });
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [isLoggedIn, setIsLoggedIn] =
+    useState<boolean>(false);
 
-  // Sync messagesMap cache to localStorage
-  useEffect(() => {
-    if (messagesMap && Object.keys(messagesMap).length > 0) {
+  const [isAuthChecking, setIsAuthChecking] =
+    useState<boolean>(true);
+
+  const [chats, setChats] =
+    useState<Chat[]>([]);
+
+  const [messagesMap, setMessagesMap] =
+    useState<Record<string, Message[]>>(() => {
       try {
-        localStorage.setItem('aarvi_messages_cache', JSON.stringify(messagesMap));
+        const cached = localStorage.getItem(
+          'aarvi_messages_cache'
+        );
+
+        if (cached) {
+          return JSON.parse(cached);
+        }
       } catch {}
-    }
-  }, [messagesMap]);
 
-  const [showNewChatModal, setShowNewChatModal] = useState(false);
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'offline'>('offline');
+      return {};
+    });
 
-  const [inAppToast, setInAppToast] = useState<{
-    id: string;
-    chatId: string;
-    senderName: string;
-    text: string;
-    avatar?: string;
-  } | null>(null);
+  const [activeChatId, setActiveChatId] =
+    useState<string | null>(null);
 
-  const lastSyncTimestampRef = useRef<string>(new Date().toISOString());
-  const typingTimeoutRefs = useRef<Record<string, any>>({});
-  const toastTimerRef = useRef<any>(null);
-  const activeChatIdRef = useRef<string | null>(activeChatId);
-  const chatsRef = useRef<Chat[]>(chats);
+  const [showNewChatModal, setShowNewChatModal] =
+    useState(false);
+
+  const [showSettingsModal, setShowSettingsModal] =
+    useState(false);
+
+  const [lightboxImage, setLightboxImage] =
+    useState<string | null>(null);
+
+  const [connectionStatus, setConnectionStatus] =
+    useState<'connected' | 'reconnecting' | 'offline'>(
+      'offline'
+    );
+
+  const [inAppToast, setInAppToast] =
+    useState<{
+      id: string;
+      chatId: string;
+      senderName: string;
+      text: string;
+      avatar?: string;
+    } | null>(null);
+
+  /*
+   * Sync timestamp starts empty.
+   * Backend decides what the first sync should return.
+   */
+  const lastSyncTimestampRef =
+    useRef<string>('');
+
+  const typingTimeoutRefs =
+    useRef<Record<string, any>>({});
+
+  const toastTimerRef =
+    useRef<any>(null);
+
+  const activeChatIdRef =
+    useRef<string | null>(activeChatId);
+
+  const chatsRef =
+    useRef<Chat[]>(chats);
+
+  const sessionStartTimeRef =
+    useRef<number>(Date.now());
+
+  const handleSelectChatRef =
+    useRef<(chatId: string) => void>(() => {});
 
   useEffect(() => {
     activeChatIdRef.current = activeChatId;
@@ -120,52 +199,98 @@ export default function App() {
     chatsRef.current = chats;
   }, [chats]);
 
-  // Store session start timestamp to prevent historic sync messages from triggering alerts
-  const sessionStartTimeRef = useRef<number>(Date.now());
-  const handleSelectChatRef = useRef<(chatId: string) => void>(() => {});
+  /*
+   * Cache messages.
+   */
+  useEffect(() => {
+    if (
+      messagesMap &&
+      Object.keys(messagesMap).length > 0
+    ) {
+      try {
+        localStorage.setItem(
+          'aarvi_messages_cache',
+          JSON.stringify(messagesMap)
+        );
+      } catch {}
+    }
+  }, [messagesMap]);
 
-  // 0. Register Service Worker & Handle SW Notification Clicks
+  /*
+   * Register service worker.
+   */
   useEffect(() => {
     registerServiceWorker();
 
-    const handleSwMessage = (event: MessageEvent) => {
-      if (event.data && event.data.type === 'OPEN_CHAT' && event.data.chatId) {
-        handleSelectChatRef.current(event.data.chatId);
+    const handleSwMessage = (
+      event: MessageEvent
+    ) => {
+      if (
+        event.data &&
+        event.data.type === 'OPEN_CHAT' &&
+        event.data.chatId
+      ) {
+        handleSelectChatRef.current(
+          event.data.chatId
+        );
       }
     };
 
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+      navigator.serviceWorker.addEventListener(
+        'message',
+        handleSwMessage
+      );
     }
 
-    (window as any).__aarvi_openChat = (chatId: string) => {
-      if (chatId) {
-        handleSelectChatRef.current(chatId);
-      }
-    };
+    (window as any).__aarvi_openChat =
+      (chatId: string) => {
+        if (chatId) {
+          handleSelectChatRef.current(chatId);
+        }
+      };
 
     try {
-      const params = new URLSearchParams(window.location.search);
-      const targetChatId = params.get('chatId');
+      const params = new URLSearchParams(
+        window.location.search
+      );
+
+      const targetChatId =
+        params.get('chatId');
+
       if (targetChatId) {
         setTimeout(() => {
-          handleSelectChatRef.current(targetChatId);
+          handleSelectChatRef.current(
+            targetChatId
+          );
         }, 100);
-        window.history.replaceState({}, '', window.location.pathname);
+
+        window.history.replaceState(
+          {},
+          '',
+          window.location.pathname
+        );
       }
     } catch {}
 
     return () => {
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+        navigator.serviceWorker.removeEventListener(
+          'message',
+          handleSwMessage
+        );
       }
+
       delete (window as any).__aarvi_openChat;
     };
   }, []);
 
-  // 1. Initial Authentication Check on Mount
+  /*
+   * Initial authentication.
+   */
   useEffect(() => {
     const token = getAuthToken();
+
     if (!token) {
       setIsAuthChecking(false);
       return;
@@ -173,7 +298,11 @@ export default function App() {
 
     apiGetMe()
       .then((res) => {
-        if (res && res.user && res.user.id) {
+        if (
+          res &&
+          res.user &&
+          res.user.id
+        ) {
           setCurrentUser(res.user);
           setIsLoggedIn(true);
         } else {
@@ -187,710 +316,1839 @@ export default function App() {
         setCurrentUser(null);
         setIsLoggedIn(false);
       })
-      .finally(() => setIsAuthChecking(false));
+      .finally(() => {
+        setIsAuthChecking(false);
+      });
   }, []);
 
-  // 2. Fetch Initial Chats and Message History on Login
+  /*
+   * Initial chats and message history.
+   */
   useEffect(() => {
     if (!isLoggedIn || !currentUser) return;
 
-    // Automatically subscribe to Web PushManager if permission granted
     subscribePushManager().catch(() => {});
 
-    apiFetchChats().then((data) => {
-      const fetchedChats = data.chats || [];
-      setChats(fetchedChats);
+    apiFetchChats()
+      .then((data) => {
+        const fetchedChats =
+          data.chats || [];
 
-      // Fetch message history for each chat with safe merging
-      fetchedChats.forEach((chat: Chat) => {
-        apiFetchMessages(chat.id).then((mRes) => {
-          if (mRes && mRes.messages) {
-            seedHistoricMessageIds(mRes.messages.map((m: Message) => m.id));
-            setMessagesMap((prev) => ({
-              ...prev,
-              [chat.id]: mergeServerAndLocalMessages(prev[chat.id] || [], mRes.messages),
-            }));
+        setChats(fetchedChats);
+
+        fetchedChats.forEach(
+          (chat: Chat) => {
+            apiFetchMessages(chat.id)
+              .then((mRes) => {
+                if (
+                  mRes &&
+                  mRes.messages
+                ) {
+                  seedHistoricMessageIds(
+                    mRes.messages.map(
+                      (m: Message) => m.id
+                    )
+                  );
+
+                  setMessagesMap(
+                    (prev) => ({
+                      ...prev,
+                      [chat.id]:
+                        mergeServerAndLocalMessages(
+                          prev[chat.id] || [],
+                          mRes.messages
+                        )
+                    })
+                  );
+                }
+              })
+              .catch(() => {});
           }
-        });
-      });
-    });
-  }, [isLoggedIn, currentUser?.id]);
+        );
+      })
+      .catch(() => {});
+  }, [
+    isLoggedIn,
+    currentUser?.id
+  ]);
 
-  // 3. Realtime SSE Event Subscription & Cross-Tab/Device Sync Engine
+  /*
+   * Realtime SSE subscription.
+   *
+   * IMPORTANT:
+   * activeChatId is intentionally NOT a dependency.
+   * Switching chats must not reconnect SSE.
+   */
   useEffect(() => {
     if (!isLoggedIn || !currentUser) return;
 
-    const unsubscribe = subscribeRealtimeEvents(
-      (event) => {
-        const { type, data } = event;
+    const unsubscribe =
+      subscribeRealtimeEvents(
+        (event) => {
+          const { type, data } = event;
 
-        if (type === 'message:new') {
-          const { message, chatId } = data;
+          if (type === 'message:new') {
+            const {
+              message,
+              chatId
+            } = data;
 
-          setMessagesMap((prevMap) => {
-            const currentMsgs = prevMap[chatId] || [];
-            // Reconcile or append incoming message
-            const idx = currentMsgs.findIndex(
-              (m) =>
-                m.id === message.id ||
-                (m.clientMsgId && m.clientMsgId === message.clientMsgId) ||
-                (message.clientMsgId && m.id === message.clientMsgId)
-            );
-
-            if (idx !== -1) {
-              const updated = [...currentMsgs];
-              updated[idx] = {
-                ...message,
-                isoDate: updated[idx].isoDate || message.isoDate,
-                timestamp: updated[idx].timestamp || message.timestamp,
-              };
-              return {
-                ...prevMap,
-                [chatId]: updated,
-              };
-            }
-
-            return {
+            setMessagesMap((prevMap) => ({
               ...prevMap,
-              [chatId]: [...currentMsgs, message],
-            };
-          });
+              [chatId]:
+                mergeServerAndLocalMessages(
+                  prevMap[chatId] || [],
+                  [message]
+                )
+            }));
 
-          setChats((prevChats) => {
-            return (prevChats || []).map((c) => {
-              if (c.id === chatId) {
-                const isCurrentActive = chatId === activeChatId && document.hasFocus();
+            setChats((prevChats) =>
+              (prevChats || []).map((chat) => {
+                if (chat.id !== chatId) {
+                  return chat;
+                }
+
+                const isCurrentActive =
+                  activeChatIdRef.current ===
+                    chatId &&
+                  document.hasFocus();
+
                 return {
-                  ...c,
+                  ...chat,
                   lastMessage: message,
                   isTyping: false,
                   typingUserName: undefined,
-                  unreadCount: isCurrentActive || message.senderId === currentUser.id
-                    ? (c.unreadCount || 0)
-                    : (c.unreadCount || 0) + 1,
+
+                  unreadCount:
+                    isCurrentActive ||
+                    message.senderId ===
+                      currentUser.id
+                      ? (
+                          chat.unreadCount ||
+                          0
+                        )
+                      : (
+                          chat.unreadCount ||
+                          0
+                        ) + 1
                 };
-              }
-              return c;
-            });
-          });
-
-          if (message.senderId !== currentUser.id && appSettings.notifications !== false) {
-            playSoundEffect('receive');
-
-            if ('vibrate' in navigator) {
-              try { navigator.vibrate([120, 80, 120]); } catch {}
-            }
-
-            const currentChatList = chatsRef.current || [];
-            const targetChat = currentChatList.find((c) => c.id === chatId);
-            const otherMember = (targetChat?.members || []).find((m) => m.id === message.senderId);
-            const senderName = message.senderName || otherMember?.name || targetChat?.name || 'AARVI User';
-            const senderAvatar = message.senderAvatar || otherMember?.avatar || targetChat?.avatar;
-            const previewText = message.text || (message.mediaType ? `[${message.mediaType.toUpperCase()}]` : 'Sent a message');
-
-            const isViewingCurrentChat = activeChatIdRef.current === chatId && document.hasFocus();
-
-            // Native Browser System Push Notification
-            if (!isViewingCurrentChat) {
-              showNativeNotification(`AARVI: ${senderName}`, {
-                body: previewText,
-                senderName,
-                avatarUrl: senderAvatar,
-                chatId,
-                messageId: message.id,
-              });
-            } else {
-              markMessageAsNotified(message.id);
-            }
-
-            // In-App Toast Notification
-            if (!isViewingCurrentChat) {
-              if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-              setInAppToast({
-                id: message.id,
-                chatId,
-                senderName,
-                text: previewText,
-                avatar: senderAvatar,
-              });
-              toastTimerRef.current = setTimeout(() => {
-                setInAppToast(null);
-              }, 4500);
-            }
-          }
-        } else if (type === 'message:read') {
-          const { chatId, readMessageIds } = data;
-          setMessagesMap((prevMap) => {
-            const currentMsgs = prevMap[chatId] || [];
-            return {
-              ...prevMap,
-              [chatId]: currentMsgs.map((m) =>
-                (!readMessageIds || readMessageIds.length === 0 || readMessageIds.includes(m.id))
-                  ? { ...m, status: 'read' as const }
-                  : m
-              ),
-            };
-          });
-          setChats((prev) =>
-            (prev || []).map((c) =>
-              c.id === chatId && c.lastMessage
-                ? { ...c, lastMessage: { ...c.lastMessage, status: 'read' } }
-                : c
-            )
-          );
-        } else if (type === 'message:delivered') {
-          const { chatId, deliveredMessageIds } = data;
-          setMessagesMap((prevMap) => {
-            const currentMsgs = prevMap[chatId] || [];
-            return {
-              ...prevMap,
-              [chatId]: currentMsgs.map((m) =>
-                (!deliveredMessageIds || deliveredMessageIds.includes(m.id))
-                  ? { ...m, status: m.status === 'read' ? 'read' : ('delivered' as const) }
-                  : m
-              ),
-            };
-          });
-          setChats((prev) =>
-            (prev || []).map((c) =>
-              c.id === chatId && c.lastMessage && c.lastMessage.status !== 'read'
-                ? { ...c, lastMessage: { ...c.lastMessage, status: 'delivered' } }
-                : c
-            )
-          );
-        } else if (type === 'message:edit') {
-          const { chatId, messageId, text } = data;
-          setMessagesMap((prevMap) => {
-            const currentMsgs = prevMap[chatId] || [];
-            return {
-              ...prevMap,
-              [chatId]: currentMsgs.map((m) =>
-                m.id === messageId ? { ...m, text, isEdited: true } : m
-              ),
-            };
-          });
-        } else if (type === 'message:delete') {
-          const { chatId, messageId } = data;
-          setMessagesMap((prevMap) => {
-            const currentMsgs = prevMap[chatId] || [];
-            return {
-              ...prevMap,
-              [chatId]: currentMsgs.filter((m) => m.id !== messageId),
-            };
-          });
-        } else if (type === 'message:react') {
-          const { chatId, messageId, reactions } = data;
-          setMessagesMap((prevMap) => {
-            const currentMsgs = prevMap[chatId] || [];
-            return {
-              ...prevMap,
-              [chatId]: currentMsgs.map((m) =>
-                m.id === messageId ? { ...m, reactions } : m
-              ),
-            };
-          });
-        } else if (type === 'chat:pin_message') {
-          const { chatId, pinnedMessageId } = data;
-          setChats((prev) =>
-            (prev || []).map((c) => (c.id === chatId ? { ...c, pinnedMessageId } : c))
-          );
-        } else if (type === 'typing:change' || type === 'typing:start' || type === 'typing:stop') {
-          const { chatId, userId, userName, isTyping } = data;
-          const isTypingActive = type === 'typing:stop' ? false : Boolean(isTyping);
-          if (userId !== currentUser.id) {
-            setChats((prev) =>
-              (prev || []).map((c) =>
-                c.id === chatId
-                  ? { ...c, isTyping: isTypingActive, typingUserName: isTypingActive ? (userName || 'Someone') : undefined }
-                  : c
-              )
+              })
             );
 
-            // 4-second timeout safety per chat
-            if (typingTimeoutRefs.current[chatId]) {
-              clearTimeout(typingTimeoutRefs.current[chatId]);
-            }
+            /*
+             * Notifications.
+             */
+            if (
+              message.senderId !==
+                currentUser.id &&
+              appSettings.notifications !== false
+            ) {
+              playSoundEffect('receive');
 
-            if (isTypingActive) {
-              typingTimeoutRefs.current[chatId] = setTimeout(() => {
-                setChats((prev) =>
-                  (prev || []).map((c) =>
-                    c.id === chatId && c.isTyping ? { ...c, isTyping: false, typingUserName: undefined } : c
-                  )
+              if ('vibrate' in navigator) {
+                try {
+                  navigator.vibrate([
+                    120,
+                    80,
+                    120
+                  ]);
+                } catch {}
+              }
+
+              const currentChatList =
+                chatsRef.current || [];
+
+              const targetChat =
+                currentChatList.find(
+                  (c) =>
+                    c.id === chatId
                 );
-              }, 4000);
+
+              const otherMember =
+                (
+                  targetChat?.members ||
+                  []
+                ).find(
+                  (member) =>
+                    member.id ===
+                    message.senderId
+                );
+
+              const senderName =
+                message.senderName ||
+                otherMember?.name ||
+                targetChat?.name ||
+                'AARVI User';
+
+              const senderAvatar =
+                message.senderAvatar ||
+                otherMember?.avatar ||
+                targetChat?.avatar;
+
+              const previewText =
+                message.text ||
+                (
+                  message.mediaType
+                    ? `[${message.mediaType.toUpperCase()}]`
+                    : 'Sent a message'
+                );
+
+              const isViewingCurrentChat =
+                activeChatIdRef.current ===
+                  chatId &&
+                document.hasFocus();
+
+              if (!isViewingCurrentChat) {
+                showNativeNotification(
+                  `AARVI: ${senderName}`,
+                  {
+                    body: previewText,
+                    senderName,
+                    avatarUrl:
+                      senderAvatar,
+                    chatId,
+                    messageId:
+                      message.id
+                  }
+                );
+              } else {
+                markMessageAsNotified(
+                  message.id
+                );
+              }
+
+              if (!isViewingCurrentChat) {
+                if (
+                  toastTimerRef.current
+                ) {
+                  clearTimeout(
+                    toastTimerRef.current
+                  );
+                }
+
+                setInAppToast({
+                  id: message.id,
+                  chatId,
+                  senderName,
+                  text: previewText,
+                  avatar:
+                    senderAvatar
+                });
+
+                toastTimerRef.current =
+                  setTimeout(() => {
+                    setInAppToast(null);
+                  }, 4500);
+              }
             }
           }
-        } else if (type === 'chat:new') {
-          const { chat } = data;
-          setChats((prev) => {
-            if ((prev || []).some((c) => c.id === chat.id)) return prev;
-            return [chat, ...(prev || [])];
-          });
-        } else if (type === 'presence:change' || type === 'presence:update') {
-          const { userId, status, lastSeen } = data;
-          setChats((prev) =>
-            (prev || []).map((c) => {
-              const isMember = (c.memberIds || []).includes(userId) || (c.members || []).some((m) => m.id === userId);
-              if (!isMember) return c;
 
-              const hasMemberObj = (c.members || []).some((m) => m.id === userId);
-              const newMembers = hasMemberObj
-                ? (c.members || []).map((m) => (m.id === userId ? { ...m, status, lastSeen } : m))
-                : [...(c.members || []), { id: userId, name: 'User', username: '@user', avatar: '', status, lastSeen, isVerified: true }];
+          else if (
+            type === 'message:read'
+          ) {
+            const {
+              chatId,
+              readMessageIds
+            } = data;
 
-              return {
-                ...c,
-                members: newMembers,
-              };
-            })
-          );
-        }
-      },
-      (status) => {
-        setConnectionStatus(status);
-        if (status === 'connected') {
-          // Send presence heartbeat immediately on reconnect
-          apiSendPresence('online').catch(() => {});
-          // Recover missed background events on reconnect
-          apiSync(lastSyncTimestampRef.current).then((syncRes) => {
-            if (syncRes && syncRes.chats) {
-              setChats(syncRes.chats);
-              lastSyncTimestampRef.current = syncRes.timestamp;
+            setMessagesMap(
+              (prevMap) => ({
+                ...prevMap,
+
+                [chatId]:
+                  (
+                    prevMap[
+                      chatId
+                    ] || []
+                  ).map((m) =>
+                    (
+                      !readMessageIds ||
+                      readMessageIds.length ===
+                        0 ||
+                      readMessageIds.includes(
+                        m.id
+                      )
+                    )
+                      ? {
+                          ...m,
+                          status:
+                            'read'
+                        }
+                      : m
+                  )
+              })
+            );
+          }
+
+          else if (
+            type ===
+            'message:delivered'
+          ) {
+            const {
+              chatId,
+              deliveredMessageIds
+            } = data;
+
+            setMessagesMap(
+              (prevMap) => ({
+                ...prevMap,
+
+                [chatId]:
+                  (
+                    prevMap[
+                      chatId
+                    ] || []
+                  ).map((m) =>
+                    (
+                      !deliveredMessageIds ||
+                      deliveredMessageIds.includes(
+                        m.id
+                      )
+                    )
+                      ? {
+                          ...m,
+                          status:
+                            m.status === 'read'
+                              ? 'read'
+                              : 'delivered'
+                        }
+                      : m
+                  )
+              })
+            );
+          }
+
+          else if (
+            type === 'message:edit'
+          ) {
+            const {
+              chatId,
+              messageId,
+              text
+            } = data;
+
+            setMessagesMap(
+              (prevMap) => ({
+                ...prevMap,
+
+                [chatId]:
+                  (
+                    prevMap[
+                      chatId
+                    ] || []
+                  ).map((m) =>
+                    m.id === messageId
+                      ? {
+                          ...m,
+                          text,
+                          isEdited: true
+                        }
+                      : m
+                  )
+              })
+            );
+          }
+
+          else if (
+            type === 'message:delete'
+          ) {
+            const {
+              chatId,
+              messageId
+            } = data;
+
+            setMessagesMap(
+              (prevMap) => ({
+                ...prevMap,
+
+                [chatId]:
+                  (
+                    prevMap[
+                      chatId
+                    ] || []
+                  ).filter(
+                    (m) =>
+                      m.id !==
+                      messageId
+                  )
+              })
+            );
+          }
+
+          else if (
+            type === 'message:react'
+          ) {
+            const {
+              chatId,
+              messageId,
+              reactions
+            } = data;
+
+            setMessagesMap(
+              (prevMap) => ({
+                ...prevMap,
+
+                [chatId]:
+                  (
+                    prevMap[
+                      chatId
+                    ] || []
+                  ).map((m) =>
+                    m.id === messageId
+                      ? {
+                          ...m,
+                          reactions
+                        }
+                      : m
+                  )
+              })
+            );
+          }
+
+          else if (
+            type ===
+            'chat:pin_message'
+          ) {
+            const {
+              chatId,
+              pinnedMessageId
+            } = data;
+
+            setChats((prev) =>
+              (
+                prev || []
+              ).map((chat) =>
+                chat.id === chatId
+                  ? {
+                      ...chat,
+                      pinnedMessageId
+                    }
+                  : chat
+              )
+            );
+          }
+
+          /*
+           * Typing indicator.
+           */
+          else if (
+            type ===
+              'typing:change' ||
+            type ===
+              'typing:start' ||
+            type ===
+              'typing:stop'
+          ) {
+            const {
+              chatId,
+              userId,
+              userName,
+              isTyping
+            } = data;
+
+            const isTypingActive =
+              type === 'typing:stop'
+                ? false
+                : Boolean(isTyping);
+
+            if (
+              userId !==
+              currentUser.id
+            ) {
+              setChats((prev) =>
+                (
+                  prev || []
+                ).map((chat) =>
+                  chat.id ===
+                  chatId
+                    ? {
+                        ...chat,
+                        isTyping:
+                          isTypingActive,
+                        typingUserName:
+                          isTypingActive
+                            ? (
+                                userName ||
+                                'Someone'
+                              )
+                            : undefined
+                      }
+                    : chat
+                )
+              );
+
+              if (
+                typingTimeoutRefs
+                  .current[
+                    chatId
+                  ]
+              ) {
+                clearTimeout(
+                  typingTimeoutRefs
+                    .current[
+                      chatId
+                    ]
+                );
+              }
+
+              if (
+                isTypingActive
+              ) {
+                typingTimeoutRefs
+                  .current[
+                    chatId
+                  ] =
+                  setTimeout(
+                    () => {
+                      setChats(
+                        (prev) =>
+                          (
+                            prev ||
+                            []
+                          ).map(
+                            (
+                              chat
+                            ) =>
+                              chat.id ===
+                                chatId &&
+                              chat.isTyping
+                                ? {
+                                    ...chat,
+                                    isTyping: false,
+                                    typingUserName:
+                                      undefined
+                                  }
+                                : chat
+                          )
+                      );
+                    },
+                    4000
+                  );
+              }
             }
-          });
+          }
+
+          /*
+           * New chat.
+           */
+          else if (
+            type === 'chat:new'
+          ) {
+            const { chat } = data;
+
+            setChats((prev) => {
+              if (
+                (
+                  prev || []
+                ).some(
+                  (c) =>
+                    c.id ===
+                    chat.id
+                )
+              ) {
+                return prev;
+              }
+
+              return [
+                chat,
+                ...(prev || [])
+              ];
+            });
+          }
+
+          /*
+           * Online/offline/last seen presence.
+           *
+           * This remains enabled.
+           */
+          else if (
+            type ===
+              'presence:change' ||
+            type ===
+              'presence:update'
+          ) {
+            const {
+              userId,
+              status,
+              lastSeen
+            } = data;
+
+            setChats((prev) =>
+              (
+                prev || []
+              ).map((chat) => {
+                const isMember =
+                  (
+                    chat.memberIds ||
+                    []
+                  ).includes(
+                    userId
+                  ) ||
+                  (
+                    chat.members ||
+                    []
+                  ).some(
+                    (member) =>
+                      member.id ===
+                      userId
+                  );
+
+                if (!isMember) {
+                  return chat;
+                }
+
+                const newMembers =
+                  (
+                    chat.members ||
+                    []
+                  ).map(
+                    (member) =>
+                      member.id ===
+                      userId
+                        ? {
+                            ...member,
+                            status,
+                            lastSeen
+                          }
+                        : member
+                  );
+
+                return {
+                  ...chat,
+                  members:
+                    newMembers
+                };
+              })
+            );
+          }
+        },
+
+        /*
+         * Connection status callback.
+         */
+        (status) => {
+          setConnectionStatus(
+            status
+          );
+
+          if (
+            status ===
+            'connected'
+          ) {
+            apiSendPresence(
+              'online'
+            ).catch(() => {});
+
+            apiSync(
+              lastSyncTimestampRef.current
+            )
+              .then(
+                (syncRes) => {
+                  if (!syncRes) {
+                    return;
+                  }
+
+                  if (
+                    syncRes.chats
+                  ) {
+                    setChats(
+                      (
+                        prevChats
+                      ) => {
+                        const typingMap =
+                          new Map(
+                            (
+                              prevChats ||
+                              []
+                            ).map(
+                              (
+                                chat
+                              ) => [
+                                chat.id,
+                                chat.isTyping
+                              ]
+                            )
+                          );
+
+                        return syncRes.chats.map(
+                          (
+                            chat: Chat
+                          ) => ({
+                            ...chat,
+                            isTyping:
+                              typingMap.get(
+                                chat.id
+                              ) ||
+                              false
+                          })
+                        );
+                      }
+                    );
+                  }
+
+                  if (
+                    syncRes.timestamp
+                  ) {
+                    lastSyncTimestampRef.current =
+                      syncRes.timestamp;
+                  }
+                }
+              )
+              .catch(() => {});
+          }
         }
-      }
-    );
+      );
 
     return () => {
       unsubscribe();
     };
-  }, [isLoggedIn, currentUser?.id, activeChatId]);
 
-  // 4. Background Periodic Sync & Recovery Handler
+  }, [
+    isLoggedIn,
+    currentUser?.id
+  ]);
+
+  /*
+   * Background fallback sync.
+   *
+   * SSE handles realtime.
+   * This runs every 30 seconds only as recovery.
+   */
   useEffect(() => {
-    if (!isLoggedIn || !currentUser) return;
+    if (!isLoggedIn || !currentUser) {
+      return;
+    }
 
-    const pollSync = async () => {
-      try {
-        const syncRes = await apiSync();
-        if (syncRes && syncRes.chats) {
-          setChats((prevChats) => {
-            const typingMap = new Map((prevChats || []).map((c) => [c.id, c.isTyping]));
-            return syncRes.chats.map((c: Chat) => ({
-              ...c,
-              isTyping: typingMap.get(c.id) || false,
-            }));
-          });
+    const pollSync =
+      async () => {
+        try {
+          const syncRes =
+            await apiSync(
+              lastSyncTimestampRef.current
+            );
 
-          if (syncRes.messagesMap) {
-            // Check for unnotified new messages from other senders (e.g. delivered while SSE was reconnecting)
-            for (const [cId, msgs] of Object.entries(syncRes.messagesMap)) {
-              const incomingMsgs = msgs as Message[];
-              for (const msg of incomingMsgs) {
+          if (!syncRes) {
+            return;
+          }
+
+          if (
+            syncRes.chats
+          ) {
+            setChats(
+              (
+                prevChats
+              ) => {
+                const typingMap =
+                  new Map(
+                    (
+                      prevChats ||
+                      []
+                    ).map(
+                      (
+                        chat
+                      ) => [
+                        chat.id,
+                        chat.isTyping
+                      ]
+                    )
+                  );
+
+                return syncRes.chats.map(
+                  (
+                    chat: Chat
+                  ) => ({
+                    ...chat,
+                    isTyping:
+                      typingMap.get(
+                        chat.id
+                      ) ||
+                      false
+                  })
+                );
+              }
+            );
+          }
+
+          if (
+            syncRes.messagesMap
+          ) {
+            for (
+              const [
+                cId,
+                msgs
+              ] of Object.entries(
+                syncRes.messagesMap
+              )
+            ) {
+              const incomingMsgs =
+                msgs as Message[];
+
+              for (
+                const msg of
+                  incomingMsgs
+              ) {
                 if (
-                  msg.senderId !== currentUser.id &&
-                  !isMessageNotified(msg.id)
+                  msg.senderId !==
+                    currentUser.id &&
+                  !isMessageNotified(
+                    msg.id
+                  )
                 ) {
-                  const msgTime = new Date(msg.isoDate || msg.timestamp).getTime();
-                  markMessageAsNotified(msg.id);
+                  markMessageAsNotified(
+                    msg.id
+                  );
 
-                  if (msgTime >= sessionStartTimeRef.current - 10000) {
-                    const isViewingCurrentChat = activeChatIdRef.current === cId && document.hasFocus();
+                  const msgTime =
+                    new Date(
+                      msg.isoDate ||
+                      msg.timestamp
+                    ).getTime();
 
-                    if (!isViewingCurrentChat && appSettings.notifications !== false) {
-                      const currentChatList = chatsRef.current || [];
-                      const targetChat = currentChatList.find((c) => c.id === cId);
-                      const otherMember = (targetChat?.members || []).find((m) => m.id === msg.senderId);
-                      const senderName = msg.senderName || otherMember?.name || targetChat?.name || 'AARVI User';
-                      const senderAvatar = msg.senderAvatar || otherMember?.avatar || targetChat?.avatar;
-                      const previewText = msg.text || (msg.mediaType ? `[${msg.mediaType.toUpperCase()}]` : 'Sent a message');
+                  if (
+                    msgTime >=
+                    sessionStartTimeRef.current -
+                      10000
+                  ) {
+                    const isViewingCurrentChat =
+                      activeChatIdRef.current ===
+                        cId &&
+                      document.hasFocus();
 
-                      showNativeNotification(`AARVI: ${senderName}`, {
-                        body: previewText,
-                        senderName,
-                        avatarUrl: senderAvatar,
-                        chatId: cId,
-                        messageId: msg.id,
-                      });
+                    if (
+                      !isViewingCurrentChat &&
+                      appSettings.notifications !==
+                        false
+                    ) {
+                      const targetChat =
+                        (
+                          chatsRef.current ||
+                          []
+                        ).find(
+                          (
+                            chat
+                          ) =>
+                            chat.id ===
+                            cId
+                        );
+
+                      const otherMember =
+                        (
+                          targetChat?.members ||
+                          []
+                        ).find(
+                          (
+                            member
+                          ) =>
+                            member.id ===
+                            msg.senderId
+                        );
+
+                      const senderName =
+                        msg.senderName ||
+                        otherMember?.name ||
+                        targetChat?.name ||
+                        'AARVI User';
+
+                      const senderAvatar =
+                        msg.senderAvatar ||
+                        otherMember?.avatar ||
+                        targetChat?.avatar;
+
+                      const previewText =
+                        msg.text ||
+                        (
+                          msg.mediaType
+                            ? `[${msg.mediaType.toUpperCase()}]`
+                            : 'Sent a message'
+                        );
+
+                      showNativeNotification(
+                        `AARVI: ${senderName}`,
+                        {
+                          body:
+                            previewText,
+                          senderName,
+                          avatarUrl:
+                            senderAvatar,
+                          chatId:
+                            cId,
+                          messageId:
+                            msg.id
+                        }
+                      );
                     }
                   }
                 }
               }
             }
 
-            setMessagesMap((prevMap) => {
-              let updated = false;
-              const nextMap = { ...prevMap };
+            setMessagesMap(
+              (
+                prevMap
+              ) => {
+                const nextMap = {
+                  ...prevMap
+                };
 
-              for (const [cId, msgs] of Object.entries(syncRes.messagesMap)) {
-                const incomingMsgs = msgs as Message[];
-                const existingMsgs = prevMap[cId] || [];
+                let updated =
+                  false;
 
-                const merged = mergeServerAndLocalMessages(existingMsgs, incomingMsgs);
+                for (
+                  const [
+                    cId,
+                    msgs
+                  ] of Object.entries(
+                    syncRes.messagesMap
+                  )
+                ) {
+                  const merged =
+                    mergeServerAndLocalMessages(
+                      prevMap[cId] ||
+                        [],
+                      msgs as Message[]
+                    );
 
-                if (existingMsgs.length !== merged.length) {
-                  nextMap[cId] = merged;
+                  nextMap[cId] =
+                    merged;
+
                   updated = true;
-                } else {
-                  for (let i = 0; i < merged.length; i++) {
-                    if (
-                      existingMsgs[i]?.id !== merged[i]?.id ||
-                      existingMsgs[i]?.status !== merged[i]?.status ||
-                      existingMsgs[i]?.text !== merged[i]?.text ||
-                      existingMsgs[i]?.isEdited !== merged[i]?.isEdited ||
-                      JSON.stringify(existingMsgs[i]?.reactions) !== JSON.stringify(merged[i]?.reactions)
-                    ) {
-                      nextMap[cId] = merged;
-                      updated = true;
-                      break;
-                    }
-                  }
                 }
+
+                return updated
+                  ? nextMap
+                  : prevMap;
               }
-
-              return updated ? nextMap : prevMap;
-            });
+            );
           }
-        }
-      } catch (err) {}
-    };
 
-    // Auto-poll every 3 seconds for seamless cross-isolate sync
-    const syncInterval = setInterval(pollSync, 3000);
+          if (
+            syncRes.timestamp
+          ) {
+            lastSyncTimestampRef.current =
+              syncRes.timestamp;
+          }
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        pollSync();
-      }
-    };
+        } catch {}
+      };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', handleVisibilityChange);
+    /*
+     * Initial recovery sync.
+     */
+    pollSync();
 
-    return () => {
-      clearInterval(syncInterval);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleVisibilityChange);
-    };
-  }, [isLoggedIn, currentUser?.id]);
-
-  // Realtime Heartbeat & Auto-Offline Detection
-  useEffect(() => {
-    if (!isLoggedIn || !currentUser) return;
-
-    // Initial online presence trigger
-    apiSendPresence('online').catch(() => {});
-
-    // Heartbeat every 18 seconds (server timeout is 45s)
-    const interval = setInterval(() => {
-      apiSendPresence('online').catch(() => {});
-    }, 18000);
-
-    const handleBeforeUnload = () => {
-      try {
-        const token = getAuthToken() || '';
-        const blob = new Blob([JSON.stringify({ status: 'offline' })], { type: 'application/json' });
-        navigator.sendBeacon('/api/presence', blob);
-      } catch (e) {}
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    window.addEventListener('pagehide', handleBeforeUnload);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      window.removeEventListener('pagehide', handleBeforeUnload);
-    };
-  }, [isLoggedIn, currentUser?.id]);
-
-  // 5. App Settings State
-  const [appSettings, setAppSettings] = useState<AppSettings>(() => {
-    try {
-      const saved = localStorage.getItem('aarvi_app_settings');
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return { theme: 'dark', wallpaper: 'default', fontSize: 'medium', notifications: true };
-  });
-
-  const handleUpdateSettings = (newSet: Partial<AppSettings>) => {
-    setAppSettings((prev) => {
-      const updated = { ...prev, ...newSet };
-      localStorage.setItem('aarvi_app_settings', JSON.stringify(updated));
-      return updated;
-    });
-  };
-
-  // 6. Mobile Back Button (History API) Handler & Chat Selection
-  const handleSelectChat = (chatId: string) => {
-    setActiveChatId(chatId);
-    if (window.history.state?.chatId !== chatId) {
-      window.history.pushState({ chatOpen: true, chatId }, '');
-    }
-    setChats((prev) =>
-      (prev || []).map((c) => (c.id === chatId ? { ...c, unreadCount: 0 } : c))
-    );
-
-    // Fetch latest messages for this chat in background and merge with local state
-    apiFetchMessages(chatId)
-      .then((mRes) => {
-        if (mRes && mRes.messages) {
-          setMessagesMap((prev) => ({
-            ...prev,
-            [chatId]: mergeServerAndLocalMessages(prev[chatId] || [], mRes.messages),
-          }));
-        }
-      })
-      .catch(() => {});
-  };
-
-  useEffect(() => {
-    handleSelectChatRef.current = handleSelectChat;
-  });
-
-  useEffect(() => {
-    const handlePopState = (e: PopStateEvent) => {
-      if (activeChatId) {
-        // User pressed device/browser back button while in chat
-        setActiveChatId(null);
-      }
-    };
-
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
-  }, [activeChatId]);
-
-  // 7. Send Message Handler with Optimistic UI & Server Reconciliation
-  const handleSendMessage = async (
-    text: string,
-    mediaType?: 'image' | 'voice' | 'file' | 'location',
-    mediaUrl?: string,
-    replyTo?: { id: string; text: string }
-  ) => {
-    if (!activeChatId || !currentUser) return;
-
-    const targetChatId = activeChatId;
-    const clientMsgId = `cmsg-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-    const nowIso = new Date().toISOString();
-
-    // Optimistic UI Message
-    const optimisticMsg: Message = {
-      id: clientMsgId,
-      clientMsgId,
-      chatId: targetChatId,
-      senderId: currentUser.id,
-      senderName: currentUser.name,
-      text,
-      timestamp: nowIso,
-      isoDate: nowIso,
-      status: 'sending',
-      mediaType,
-      mediaUrl,
-      replyToText: replyTo?.text,
-      isEncrypted: true,
-    };
-
-    // Update Local State Optimistically
-    setMessagesMap((prevMap) => ({
-      ...prevMap,
-      [targetChatId]: [...(prevMap[targetChatId] || []), optimisticMsg],
-    }));
-
-    setChats((prev) =>
-      (prev || []).map((c) => (c.id === targetChatId ? { ...c, lastMessage: optimisticMsg } : c))
-    );
-
-    try {
-      const ackRes = await apiSendMessage(
-        targetChatId,
-        text,
-        mediaType,
-        mediaUrl,
-        replyTo?.id,
-        replyTo?.text,
-        clientMsgId
+    /*
+     * Reduced database polling.
+     */
+    const syncInterval =
+      setInterval(
+        pollSync,
+        30000
       );
 
-      if (ackRes && ackRes.message) {
-        const confirmedMsg = ackRes.message;
-        // Reconcile optimistic message with server message while preserving initial client creation timestamp
-        setMessagesMap((prevMap) => {
-          const currentMsgs = prevMap[targetChatId] || [];
-          const idx = currentMsgs.findIndex(
-            (m) => m.clientMsgId === clientMsgId || m.id === clientMsgId || m.id === confirmedMsg.id
+    const handleVisibilityChange =
+      () => {
+        if (
+          document.visibilityState ===
+          'visible'
+        ) {
+          pollSync();
+        }
+      };
+
+    document.addEventListener(
+      'visibilitychange',
+      handleVisibilityChange
+    );
+
+    window.addEventListener(
+      'focus',
+      handleVisibilityChange
+    );
+
+    return () => {
+      clearInterval(
+        syncInterval
+      );
+
+      document.removeEventListener(
+        'visibilitychange',
+        handleVisibilityChange
+      );
+
+      window.removeEventListener(
+        'focus',
+        handleVisibilityChange
+      );
+    };
+
+  }, [
+    isLoggedIn,
+    currentUser?.id
+  ]);
+
+  /*
+   * Presence heartbeat.
+   *
+   * Online/offline system remains active.
+   */
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser) {
+      return;
+    }
+
+    apiSendPresence(
+      'online'
+    ).catch(() => {});
+
+    const interval =
+      setInterval(
+        () => {
+          apiSendPresence(
+            'online'
+          ).catch(() => {});
+        },
+        18000
+      );
+
+    const handleBeforeUnload =
+      () => {
+        try {
+          const blob =
+            new Blob(
+              [
+                JSON.stringify({
+                  status:
+                    'offline'
+                })
+              ],
+              {
+                type:
+                  'application/json'
+              }
+            );
+
+          navigator.sendBeacon(
+            '/api/presence',
+            blob
+          );
+        } catch {}
+      };
+
+    window.addEventListener(
+      'beforeunload',
+      handleBeforeUnload
+    );
+
+    window.addEventListener(
+      'pagehide',
+      handleBeforeUnload
+    );
+
+    return () => {
+      clearInterval(
+        interval
+      );
+
+      window.removeEventListener(
+        'beforeunload',
+        handleBeforeUnload
+      );
+
+      window.removeEventListener(
+        'pagehide',
+        handleBeforeUnload
+      );
+    };
+
+  }, [
+    isLoggedIn,
+    currentUser?.id
+  ]);
+
+  /*
+   * App settings.
+   */
+  const [
+    appSettings,
+    setAppSettings
+  ] = useState<AppSettings>(
+    () => {
+      try {
+        const saved =
+          localStorage.getItem(
+            'aarvi_app_settings'
           );
 
-          if (idx !== -1) {
-            const updated = [...currentMsgs];
-            const preservedIso = currentMsgs[idx].isoDate || confirmedMsg.isoDate || nowIso;
-            const preservedTs = currentMsgs[idx].timestamp || confirmedMsg.timestamp || preservedIso;
-            updated[idx] = {
-              ...confirmedMsg,
-              isoDate: preservedIso,
-              timestamp: preservedTs,
-            };
-            return {
-              ...prevMap,
-              [targetChatId]: updated,
-            };
-          }
+        if (saved) {
+          return JSON.parse(
+            saved
+          );
+        }
+      } catch {}
 
-          return {
-            ...prevMap,
-            [targetChatId]: [...currentMsgs, confirmedMsg],
+      return {
+        theme:
+          'dark',
+        wallpaper:
+          'default',
+        fontSize:
+          'medium',
+        notifications:
+          true
+      };
+    }
+  );
+
+  const handleUpdateSettings =
+    (
+      newSet:
+        Partial<AppSettings>
+    ) => {
+      setAppSettings(
+        (prev) => {
+          const updated = {
+            ...prev,
+            ...newSet
           };
-        });
 
-        setChats((prev) =>
-          (prev || []).map((c) =>
-            c.id === targetChatId ? { ...c, lastMessage: confirmedMsg } : c
-          )
+          localStorage.setItem(
+            'aarvi_app_settings',
+            JSON.stringify(
+              updated
+            )
+          );
+
+          return updated;
+        }
+      );
+    };
+
+  /*
+   * Chat selection.
+   */
+  const handleSelectChat =
+    (
+      chatId: string
+    ) => {
+      setActiveChatId(
+        chatId
+      );
+
+      if (
+        window.history.state
+          ?.chatId !==
+        chatId
+      ) {
+        window.history.pushState(
+          {
+            chatOpen:
+              true,
+            chatId
+          },
+          ''
         );
       }
-    } catch (err) {
-      console.error('Failed to deliver message:', err);
-    }
-  };
 
-  // 8. Message Feature Handlers: Edit, Delete, React, Pin, Forward
-  const handleEditMessage = async (messageId: string, text: string) => {
-    if (!activeChatId) return;
-    setMessagesMap((prev) => ({
-      ...prev,
-      [activeChatId]: (prev[activeChatId] || []).map((m) =>
-        m.id === messageId ? { ...m, text, isEdited: true } : m
-      ),
-    }));
-    try {
-      await apiEditMessage(messageId, text);
-    } catch (err) {
-      console.error('Edit message failed:', err);
-    }
-  };
+      setChats((prev) =>
+        (
+          prev || []
+        ).map((chat) =>
+          chat.id === chatId
+            ? {
+                ...chat,
+                unreadCount:
+                  0
+              }
+            : chat
+        )
+      );
 
-  const handleDeleteMessage = async (messageId: string, deleteForEveryone: boolean) => {
-    if (!activeChatId) return;
-    setMessagesMap((prev) => ({
-      ...prev,
-      [activeChatId]: (prev[activeChatId] || []).filter((m) => m.id !== messageId),
-    }));
-    try {
-      await apiDeleteMessage(messageId, deleteForEveryone);
-    } catch (err) {
-      console.error('Delete message failed:', err);
-    }
-  };
-
-  const handleReactMessage = async (messageId: string, emoji: string) => {
-    if (!activeChatId || !currentUser) return;
-    setMessagesMap((prev) => {
-      const msgs = prev[activeChatId] || [];
-      return {
-        ...prev,
-        [activeChatId]: msgs.map((m) => {
-          if (m.id !== messageId) return m;
-          const reactions = m.reactions || [];
-          const existing = reactions.find((r) => r.emoji === emoji);
-          let updatedReactions;
-          if (existing) {
-            const hasUser = existing.users.includes(currentUser.id);
-            if (hasUser) {
-              const newUsers = existing.users.filter((u) => u !== currentUser.id);
-              updatedReactions = reactions
-                .map((r) => (r.emoji === emoji ? { ...r, count: newUsers.length, users: newUsers } : r))
-                .filter((r) => r.count > 0);
-            } else {
-              const newUsers = [...existing.users, currentUser.id];
-              updatedReactions = reactions.map((r) =>
-                r.emoji === emoji ? { ...r, count: newUsers.length, users: newUsers } : r
+      apiFetchMessages(
+        chatId
+      )
+        .then(
+          (
+            mRes
+          ) => {
+            if (
+              mRes &&
+              mRes.messages
+            ) {
+              setMessagesMap(
+                (prev) => ({
+                  ...prev,
+                  [chatId]:
+                    mergeServerAndLocalMessages(
+                      prev[
+                        chatId
+                      ] || [],
+                      mRes.messages
+                    )
+                })
               );
             }
-          } else {
-            updatedReactions = [...reactions, { emoji, count: 1, users: [currentUser.id] }];
           }
-          return { ...m, reactions: updatedReactions };
-        }),
+        )
+        .catch(() => {});
+    };
+
+  useEffect(() => {
+    handleSelectChatRef.current =
+      handleSelectChat;
+  });
+
+  useEffect(() => {
+    const handlePopState =
+      () => {
+        if (
+          activeChatId
+        ) {
+          setActiveChatId(
+            null
+          );
+        }
       };
-    });
-    try {
-      await apiReactToMessage(messageId, emoji);
-    } catch (err) {
-      console.error('React message failed:', err);
-    }
-  };
 
-  const handlePinMessage = async (chatId: string, messageId: string | null) => {
-    setChats((prev) =>
-      (prev || []).map((c) => (c.id === chatId ? { ...c, pinnedMessageId: messageId || undefined } : c))
+    window.addEventListener(
+      'popstate',
+      handlePopState
     );
-    try {
-      await apiPinMessage(chatId, messageId);
-    } catch (err) {
-      console.error('Pin message failed:', err);
-    }
-  };
 
-  const handleForwardMessage = async (targetChatId: string, message: Message) => {
-    const text = `[Forwarded from ${message.senderName}]: ${message.text}`;
-    const fwdIso = new Date().toISOString();
-    await apiSendMessage(targetChatId, text, message.mediaType, message.mediaUrl);
-    setMessagesMap((prev) => {
-      const targetMsgs = prev[targetChatId] || [];
-      const fwdMsg: Message = {
-        id: `fwd-${Date.now()}`,
-        chatId: targetChatId,
-        senderId: currentUser!.id,
-        senderName: currentUser!.name,
+    return () => {
+      window.removeEventListener(
+        'popstate',
+        handlePopState
+      );
+    };
+  }, [
+    activeChatId
+  ]);
+
+  /*
+   * Send message.
+   */
+  const handleSendMessage =
+    async (
+      text: string,
+      mediaType?:
+        | 'image'
+        | 'voice'
+        | 'file'
+        | 'location',
+      mediaUrl?: string,
+      replyTo?: {
+        id: string;
+        text: string;
+      }
+    ) => {
+      if (
+        !activeChatId ||
+        !currentUser
+      ) {
+        return;
+      }
+
+      const targetChatId =
+        activeChatId;
+
+      const clientMsgId =
+        `cmsg-${Date.now()}-${Math.random()
+          .toString(36)
+          .substring(2, 8)}`;
+
+      const nowIso =
+        new Date()
+          .toISOString();
+
+      const optimisticMsg:
+        Message = {
+          id:
+            clientMsgId,
+          clientMsgId,
+          chatId:
+            targetChatId,
+          senderId:
+            currentUser.id,
+          senderName:
+            currentUser.name,
+          text,
+          timestamp:
+            nowIso,
+          isoDate:
+            nowIso,
+          status:
+            'sending',
+          mediaType,
+          mediaUrl,
+          replyToText:
+            replyTo?.text,
+          isEncrypted:
+            true
+        };
+
+      setMessagesMap(
+        (prevMap) => ({
+          ...prevMap,
+          [targetChatId]:
+            mergeServerAndLocalMessages(
+              prevMap[
+                targetChatId
+              ] || [],
+              [
+                optimisticMsg
+              ]
+            )
+        })
+      );
+
+      setChats((prev) =>
+        (
+          prev || []
+        ).map((chat) =>
+          chat.id ===
+          targetChatId
+            ? {
+                ...chat,
+                lastMessage:
+                  optimisticMsg
+              }
+            : chat
+        )
+      );
+
+      try {
+        const ackRes =
+          await apiSendMessage(
+            targetChatId,
+            text,
+            mediaType,
+            mediaUrl,
+            replyTo?.id,
+            replyTo?.text,
+            clientMsgId
+          );
+
+        if (
+          ackRes &&
+          ackRes.message
+        ) {
+          const confirmedMsg =
+            ackRes.message;
+
+          setMessagesMap(
+            (prevMap) => ({
+              ...prevMap,
+              [targetChatId]:
+                mergeServerAndLocalMessages(
+                  prevMap[
+                    targetChatId
+                  ] || [],
+                  [
+                    confirmedMsg
+                  ]
+                )
+            })
+          );
+
+          setChats((prev) =>
+            (
+              prev || []
+            ).map((chat) =>
+              chat.id ===
+              targetChatId
+                ? {
+                    ...chat,
+                    lastMessage:
+                      confirmedMsg
+                  }
+                : chat
+            )
+          );
+        }
+
+      } catch (err) {
+        console.error(
+          'Failed to deliver message:',
+          err
+        );
+      }
+    };
+
+  /*
+   * Message edit.
+   */
+  const handleEditMessage =
+    async (
+      messageId: string,
+      text: string
+    ) => {
+      if (
+        !activeChatId
+      ) return;
+
+      setMessagesMap(
+        (prev) => ({
+          ...prev,
+          [activeChatId]:
+            (
+              prev[
+                activeChatId
+              ] || []
+            ).map((m) =>
+              m.id ===
+              messageId
+                ? {
+                    ...m,
+                    text,
+                    isEdited:
+                      true
+                  }
+                : m
+            )
+        })
+      );
+
+      try {
+        await apiEditMessage(
+          messageId,
+          text
+        );
+      } catch (
+        err
+      ) {
+        console.error(
+          'Edit message failed:',
+          err
+        );
+      }
+    };
+
+  /*
+   * Delete message.
+   */
+  const handleDeleteMessage =
+    async (
+      messageId: string,
+      deleteForEveryone: boolean
+    ) => {
+      if (
+        !activeChatId
+      ) return;
+
+      setMessagesMap(
+        (prev) => ({
+          ...prev,
+          [activeChatId]:
+            (
+              prev[
+                activeChatId
+              ] || []
+            ).filter(
+              (m) =>
+                m.id !==
+                messageId
+            )
+        })
+      );
+
+      try {
+        await apiDeleteMessage(
+          messageId,
+          deleteForEveryone
+        );
+      } catch (
+        err
+      ) {
+        console.error(
+          'Delete message failed:',
+          err
+        );
+      }
+    };
+
+  /*
+   * React to message.
+   */
+  const handleReactMessage =
+    async (
+      messageId: string,
+      emoji: string
+    ) => {
+      if (
+        !activeChatId ||
+        !currentUser
+      ) {
+        return;
+      }
+
+      setMessagesMap(
+        (prev) => {
+          const msgs =
+            prev[
+              activeChatId
+            ] || [];
+
+          return {
+            ...prev,
+            [activeChatId]:
+              msgs.map(
+                (message) => {
+                  if (
+                    message.id !==
+                    messageId
+                  ) {
+                    return message;
+                  }
+
+                  const reactions =
+                    message.reactions ||
+                    [];
+
+                  const existing =
+                    reactions.find(
+                      (r) =>
+                        r.emoji ===
+                        emoji
+                    );
+
+                  let updatedReactions;
+
+                  if (
+                    existing
+                  ) {
+                    const hasUser =
+                      existing.users.includes(
+                        currentUser.id
+                      );
+
+                    if (
+                      hasUser
+                    ) {
+                      const newUsers =
+                        existing.users.filter(
+                          (userId) =>
+                            userId !==
+                            currentUser.id
+                        );
+
+                      updatedReactions =
+                        reactions
+                          .map(
+                            (
+                              reaction
+                            ) =>
+                              reaction.emoji ===
+                              emoji
+                                ? {
+                                    ...reaction,
+                                    count:
+                                      newUsers.length,
+                                    users:
+                                      newUsers
+                                  }
+                                : reaction
+                          )
+                          .filter(
+                            (
+                              reaction
+                            ) =>
+                              reaction.count >
+                              0
+                          );
+                    } else {
+                      const newUsers =
+                        [
+                          ...existing.users,
+                          currentUser.id
+                        ];
+
+                      updatedReactions =
+                        reactions.map(
+                          (
+                            reaction
+                          ) =>
+                            reaction.emoji ===
+                            emoji
+                              ? {
+                                  ...reaction,
+                                  count:
+                                    newUsers.length,
+                                  users:
+                                    newUsers
+                                }
+                              : reaction
+                        );
+                    }
+                  } else {
+                    updatedReactions =
+                      [
+                        ...reactions,
+                        {
+                          emoji,
+                          count:
+                            1,
+                          users:
+                            [
+                              currentUser.id
+                            ]
+                        }
+                      ];
+                  }
+
+                  return {
+                    ...message,
+                    reactions:
+                      updatedReactions
+                  };
+                }
+              )
+          };
+        }
+      );
+
+      try {
+        await apiReactToMessage(
+          messageId,
+          emoji
+        );
+      } catch (
+        err
+      ) {
+        console.error(
+          'React message failed:',
+          err
+        );
+      }
+    };
+
+  /*
+   * Pin message.
+   */
+  const handlePinMessage =
+    async (
+      chatId: string,
+      messageId:
+        | string
+        | null
+    ) => {
+      setChats((prev) =>
+        (
+          prev || []
+        ).map((chat) =>
+          chat.id === chatId
+            ? {
+                ...chat,
+                pinnedMessageId:
+                  messageId ||
+                  undefined
+              }
+            : chat
+        )
+      );
+
+      try {
+        await apiPinMessage(
+          chatId,
+          messageId
+        );
+      } catch (
+        err
+      ) {
+        console.error(
+          'Pin message failed:',
+          err
+        );
+      }
+    };
+
+  /*
+   * Forward message.
+   */
+  const handleForwardMessage =
+    async (
+      targetChatId: string,
+      message: Message
+    ) => {
+      const text =
+        `[Forwarded from ${message.senderName}]: ${message.text}`;
+
+      const fwdIso =
+        new Date()
+          .toISOString();
+
+      await apiSendMessage(
+        targetChatId,
         text,
-        timestamp: fwdIso,
-        isoDate: fwdIso,
-        status: 'sent',
-        mediaType: message.mediaType,
-        mediaUrl: message.mediaUrl,
-        isEncrypted: true,
-      };
-      return { ...prev, [targetChatId]: [...targetMsgs, fwdMsg] };
-    });
-  };
+        message.mediaType,
+        message.mediaUrl
+      );
 
-  // 9. Chat Creation Handler from Modal
-  const handleChatCreated = (newChat: Chat) => {
-    setChats((prev) => {
-      if ((prev || []).some((c) => c.id === newChat.id)) return prev;
-      return [newChat, ...(prev || [])];
-    });
-    setActiveChatId(newChat.id);
-  };
+      setMessagesMap(
+        (prev) => {
+          const targetMsgs =
+            prev[
+              targetChatId
+            ] || [];
 
-  const handleSetSelfDestructTimer = (chatId: string, seconds: number) => {
-    setChats((prev) =>
-      (prev || []).map((c) => (c.id === chatId ? { ...c, selfDestructTimer: seconds } : c))
+          const fwdMsg:
+            Message = {
+              id:
+                `fwd-${Date.now()}`,
+              chatId:
+                targetChatId,
+              senderId:
+                currentUser!.id,
+              senderName:
+                currentUser!.name,
+              text,
+              timestamp:
+                fwdIso,
+              isoDate:
+                fwdIso,
+              status:
+                'sent',
+              mediaType:
+                message.mediaType,
+              mediaUrl:
+                message.mediaUrl,
+              isEncrypted:
+                true
+            };
+
+          return {
+            ...prev,
+            [targetChatId]:
+              [
+                ...targetMsgs,
+                fwdMsg
+              ]
+          };
+        }
+      );
+    };
+
+  /*
+   * New chat.
+   */
+  const handleChatCreated =
+    (
+      newChat: Chat
+    ) => {
+      setChats((prev) => {
+        if (
+          (
+            prev || []
+          ).some(
+            (chat) =>
+              chat.id ===
+              newChat.id
+          )
+        ) {
+          return prev;
+        }
+
+        return [
+          newChat,
+          ...(prev || [])
+        ];
+      });
+
+      setActiveChatId(
+        newChat.id
+      );
+    };
+
+  const handleSetSelfDestructTimer =
+    (
+      chatId: string,
+      seconds: number
+    ) => {
+      setChats((prev) =>
+        (
+          prev || []
+        ).map((chat) =>
+          chat.id === chatId
+            ? {
+                ...chat,
+                selfDestructTimer:
+                  seconds
+              }
+            : chat
+        )
+      );
+    };
+
+  /*
+   * Logout.
+   */
+  const handleLogout =
+    () => {
+      clearAuthToken();
+
+      try {
+        localStorage.removeItem(
+          'aarvi_messages_cache'
+        );
+      } catch {}
+
+      setIsLoggedIn(
+        false
+      );
+
+      setCurrentUser(
+        null
+      );
+
+      setChats([]);
+
+      setMessagesMap({});
+
+      setActiveChatId(
+        null
+      );
+    };
+
+  const unreadTotal =
+    (chats || []).reduce(
+      (
+        total,
+        chat
+      ) =>
+        total +
+        (
+          chat?.unreadCount ||
+          0
+        ),
+      0
     );
-  };
 
-  const handleLogout = () => {
-    clearAuthToken();
-    setIsLoggedIn(false);
-    setCurrentUser(null);
-    setChats([]);
-    setMessagesMap({});
-    setActiveChatId(null);
-  };
+  const activeChat =
+    (
+      chats || []
+    ).find(
+      (chat) =>
+        chat.id ===
+        activeChatId
+    ) || null;
 
-  const unreadTotal = (chats || []).reduce((acc, c) => acc + (c?.unreadCount || 0), 0);
-  const activeChat = (chats || []).find((c) => c.id === activeChatId) || null;
-  const activeMessages = activeChatId ? messagesMap[activeChatId] || [] : [];
+  const activeMessages =
+    activeChatId
+      ? (
+          messagesMap[
+            activeChatId
+          ] || []
+        )
+      : [];
 
-  if (isAuthChecking) {
+  if (
+    isAuthChecking
+  ) {
     return (
       <div className="h-screen w-screen bg-slate-950 flex flex-col items-center justify-center text-emerald-400 font-sans space-y-3">
         <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center animate-pulse">
           🔒
         </div>
+
         <p className="text-xs font-bold tracking-wider uppercase text-slate-300">
           Initializing AARVI Production Messenger Engine...
         </p>
@@ -898,57 +2156,99 @@ export default function App() {
     );
   }
 
-  if (!isLoggedIn || !currentUser) {
+  if (
+    !isLoggedIn ||
+    !currentUser
+  ) {
     return (
       <LoginScreen
-        onLoginSuccess={(user) => {
-          setCurrentUser(user);
-          setIsLoggedIn(true);
-        }}
+        onLoginSuccess={
+          (user) => {
+            setCurrentUser(
+              user
+            );
+
+            setIsLoggedIn(
+              true
+            );
+          }
+        }
       />
     );
   }
 
   return (
     <div className="h-[100dvh] w-full max-w-full overflow-hidden bg-slate-950 flex flex-col font-sans antialiased selection:bg-emerald-500 selection:text-slate-950">
-      {/* Realtime Connection Status Indicator Banner */}
-      {connectionStatus !== 'connected' && (
+
+      {connectionStatus !==
+        'connected' && (
         <div className="bg-amber-950/80 border-b border-amber-900 text-amber-200 text-[11px] font-medium px-4 py-1 text-center flex items-center justify-center gap-2 z-50">
           <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-          <span>Realtime Connection Re-establishing... Retrying stream packet relay.</span>
+
+          <span>
+            Realtime Connection Re-establishing...
+          </span>
         </div>
       )}
 
-      {/* Floating In-App Message Notification Toast */}
       {inAppToast && (
         <div
           onClick={() => {
-            setActiveChatId(inAppToast.chatId);
-            setInAppToast(null);
+            handleSelectChat(
+              inAppToast.chatId
+            );
+
+            setInAppToast(
+              null
+            );
           }}
           className="fixed top-4 right-4 z-[100] bg-slate-900/95 border border-emerald-500/50 text-white rounded-2xl p-3.5 shadow-2xl flex items-center space-x-3.5 max-w-sm w-[92vw] sm:w-auto cursor-pointer animate-in fade-in slide-in-from-top-4 duration-300 hover:border-emerald-400 transition-all backdrop-blur-md"
         >
           <div className="relative flex-shrink-0">
             <img
-              src={getDisplayAvatar(inAppToast.senderName, inAppToast.avatar, inAppToast.chatId)}
-              alt={inAppToast.senderName}
+              src={getDisplayAvatar(
+                inAppToast.senderName,
+                inAppToast.avatar,
+                inAppToast.chatId
+              )}
+              alt={
+                inAppToast.senderName
+              }
               className="w-11 h-11 rounded-full object-cover border border-emerald-500/40 bg-slate-800"
             />
+
             <span className="absolute -top-1 -right-1 bg-emerald-500 text-slate-950 p-1 rounded-full shadow-md">
               <Bell className="w-3 h-3" />
             </span>
           </div>
+
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-2">
-              <h5 className="text-xs font-bold text-emerald-400 truncate">{inAppToast.senderName}</h5>
-              <span className="text-[10px] text-slate-400 font-mono flex-shrink-0">New Message</span>
+              <h5 className="text-xs font-bold text-emerald-400 truncate">
+                {
+                  inAppToast.senderName
+                }
+              </h5>
+
+              <span className="text-[10px] text-slate-400 font-mono flex-shrink-0">
+                New Message
+              </span>
             </div>
-            <p className="text-xs text-slate-200 truncate mt-0.5">{inAppToast.text}</p>
+
+            <p className="text-xs text-slate-200 truncate mt-0.5">
+              {
+                inAppToast.text
+              }
+            </p>
           </div>
+
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setInAppToast(null);
+
+              setInAppToast(
+                null
+              );
             }}
             className="p-1 text-slate-400 hover:text-white rounded-lg flex-shrink-0 hover:bg-slate-800"
           >
@@ -957,83 +2257,173 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Telegram Layout Container */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Sidebar Chat List */}
+
         <div
           className={`w-full md:w-80 lg:w-96 flex-shrink-0 h-full ${
-            activeChatId ? 'hidden md:flex' : 'flex'
+            activeChatId
+              ? 'hidden md:flex'
+              : 'flex'
           }`}
         >
           <SidebarChatList
             chats={chats}
-            activeChatId={activeChatId}
-            onSelectChat={handleSelectChat}
-            currentUser={currentUser}
-            onOpenNewChatModal={() => setShowNewChatModal(true)}
-            onOpenSettingsModal={() => setShowSettingsModal(true)}
-            onLockApp={handleLogout}
-            unreadTotal={unreadTotal}
+            activeChatId={
+              activeChatId
+            }
+            onSelectChat={
+              handleSelectChat
+            }
+            currentUser={
+              currentUser
+            }
+            onOpenNewChatModal={() =>
+              setShowNewChatModal(
+                true
+              )
+            }
+            onOpenSettingsModal={() =>
+              setShowSettingsModal(
+                true
+              )
+            }
+            onLockApp={
+              handleLogout
+            }
+            unreadTotal={
+              unreadTotal
+            }
           />
         </div>
 
-        {/* Chat Window Main View */}
         <div
           className={`flex-1 h-full flex flex-col ${
-            !activeChatId ? 'hidden md:flex' : 'flex'
+            !activeChatId
+              ? 'hidden md:flex'
+              : 'flex'
           }`}
         >
           {activeChat ? (
             <ChatWindow
-              chat={activeChat}
-              messages={activeMessages}
-              onSendMessage={handleSendMessage}
-              currentUser={currentUser}
-              onOpenImagePreview={(url) => setLightboxImage(url)}
-              onSetSelfDestructTimer={handleSetSelfDestructTimer}
-              onBackToChatList={() => setActiveChatId(null)}
-              onEditMessage={handleEditMessage}
-              onDeleteMessage={handleDeleteMessage}
-              onReactMessage={handleReactMessage}
-              onPinMessage={handlePinMessage}
-              allChats={chats}
-              onForwardMessage={handleForwardMessage}
+              chat={
+                activeChat
+              }
+              messages={
+                activeMessages
+              }
+              onSendMessage={
+                handleSendMessage
+              }
+              currentUser={
+                currentUser
+              }
+              onOpenImagePreview={
+                (url) =>
+                  setLightboxImage(
+                    url
+                  )
+              }
+              onSetSelfDestructTimer={
+                handleSetSelfDestructTimer
+              }
+              onBackToChatList={() =>
+                setActiveChatId(
+                  null
+                )
+              }
+              onEditMessage={
+                handleEditMessage
+              }
+              onDeleteMessage={
+                handleDeleteMessage
+              }
+              onReactMessage={
+                handleReactMessage
+              }
+              onPinMessage={
+                handlePinMessage
+              }
+              allChats={
+                chats
+              }
+              onForwardMessage={
+                handleForwardMessage
+              }
             />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center bg-slate-950 p-6 text-center text-slate-500 space-y-3">
               <div className="w-16 h-16 rounded-3xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400">
                 🔒
               </div>
-              <h3 className="text-lg font-bold text-white">AARVI Production Messenger</h3>
+
+              <h3 className="text-lg font-bold text-white">
+                AARVI Production Messenger
+              </h3>
+
               <p className="text-xs max-w-sm">
-                Select a conversation or click <span className="text-emerald-400 font-bold">+</span> to start an end-to-end encrypted chat with any registered user.
+                Select a conversation or click{' '}
+                <span className="text-emerald-400 font-bold">
+                  +
+                </span>{' '}
+                to start an end-to-end encrypted chat with any registered user.
               </p>
             </div>
           )}
         </div>
       </div>
 
-      {/* Modals & Overlay Screens */}
       <NewChatModal
-        isOpen={showNewChatModal}
-        onClose={() => setShowNewChatModal(false)}
-        onChatCreated={handleChatCreated}
-        currentUserId={currentUser.id}
+        isOpen={
+          showNewChatModal
+        }
+        onClose={() =>
+          setShowNewChatModal(
+            false
+          )
+        }
+        onChatCreated={
+          handleChatCreated
+        }
+        currentUserId={
+          currentUser.id
+        }
       />
 
       <SecuritySettingsModal
-        isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
-        currentUser={currentUser}
-        onClearStorage={handleLogout}
-        onLogout={handleLogout}
-        settings={appSettings}
-        onUpdateSettings={handleUpdateSettings}
+        isOpen={
+          showSettingsModal
+        }
+        onClose={() =>
+          setShowSettingsModal(
+            false
+          )
+        }
+        currentUser={
+          currentUser
+        }
+        onClearStorage={
+          handleLogout
+        }
+        onLogout={
+          handleLogout
+        }
+        settings={
+          appSettings
+        }
+        onUpdateSettings={
+          handleUpdateSettings
+        }
       />
 
       <ImageLightboxModal
-        imageUrl={lightboxImage}
-        onClose={() => setLightboxImage(null)}
+        imageUrl={
+          lightboxImage
+        }
+        onClose={() =>
+          setLightboxImage(
+            null
+          )
+        }
       />
     </div>
   );
