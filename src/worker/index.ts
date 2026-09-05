@@ -1430,7 +1430,8 @@ export default {
         return jsonResponse({ success: true, status: newStatus, lastSeen });
       }
 
-      // 17. Full Sync (now incremental — only pulls NEW messages since last sync)
+      // 17. Full Sync (now incremental — chats AND messages are only
+      // recomputed when something actually changed, not on every poll)
       if (pathname === '/api/sync' && request.method === 'GET') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         const currentUserId = decodedUser.id;
@@ -1440,12 +1441,64 @@ export default {
         const userMessagesMap: Record<string, ServerMessage[]> = {};
 
         if (env.DB) {
-          userChats = await getD1ChatsForUser(env.DB, currentUserId);
-          for (const c of userChats) {
-            const newMsgs = await getD1NewMessagesForChat(env.DB, c.id, since);
-            if (newMsgs.length > 0) {
-              userMessagesMap[c.id] = newMsgs;
+          if (!since) {
+            // First sync after login/reload: full snapshot, as before.
+            userChats = await getD1ChatsForUser(env.DB, currentUserId);
+            for (const c of userChats) {
+              const newMsgs = await getD1NewMessagesForChat(env.DB, c.id, since);
+              if (newMsgs.length > 0) {
+                userMessagesMap[c.id] = newMsgs;
+              }
             }
+          } else {
+            // Incremental sync: cheaply find which chats the user is in,
+            // then only do the expensive per-chat work (members + unread
+            // count) for chats that actually have new messages.
+            const memberRows: any = await env.DB.prepare(
+              'SELECT chat_id FROM chat_members WHERE user_id = ?'
+            ).bind(currentUserId).all();
+            const chatIds: string[] = (memberRows?.results || []).map((r: any) => r.chat_id);
+
+            const changedChats: any[] = [];
+            for (const cId of chatIds) {
+              const newMsgs = await getD1NewMessagesForChat(env.DB, cId, since);
+              if (newMsgs.length === 0) continue; // nothing changed — skip entirely
+
+              userMessagesMap[cId] = newMsgs;
+
+              const chat = await getD1ChatById(env.DB, cId);
+              if (!chat) continue;
+
+              const rawMembers = await Promise.all(chat.memberIds.map((mId) => getFullUser(env.DB, mId)));
+              const members = rawMembers.filter((m): m is ServerUser => m !== null);
+
+              let displayName = chat.name;
+              let displayAvatar = chat.avatar;
+              if (!chat.isGroup && !chat.isSecret) {
+                const otherUser = members.find((m) => m.id !== currentUserId);
+                if (otherUser) {
+                  displayName = otherUser.name;
+                  displayAvatar = otherUser.avatar || generateInitialsAvatarSvg(otherUser.name, otherUser.username);
+                }
+              } else if (chat.isSecret) {
+                const otherUser = members.find((m) => m.id !== currentUserId);
+                if (otherUser) {
+                  displayName = `🔒 Secret Vault (${otherUser.name})`;
+                  displayAvatar = otherUser.avatar;
+                }
+              }
+
+              let unreadCount = 0;
+              try {
+                const unreadRow: any = await env.DB.prepare(
+                  `SELECT COUNT(*) as cnt FROM messages WHERE chat_id = ? AND sender_id != ? AND status != 'read'`
+                ).bind(cId, currentUserId).first();
+                if (unreadRow) unreadCount = Number(unreadRow.cnt || 0);
+              } catch {}
+
+              changedChats.push({ ...chat, name: displayName, avatar: displayAvatar, members, unreadCount, pinned: false });
+            }
+            userChats = changedChats; // may be empty — that's expected and cheap
           }
         } else {
           userChats = Object.values(chatsDb).filter((c) => c.memberIds.includes(currentUserId));
@@ -1458,8 +1511,12 @@ export default {
 
         return jsonResponse({
           timestamp: new Date().toISOString(),
-          chats: userChats,
+          // On incremental syncs, omit `chats` entirely when nothing changed
+          // so the frontend doesn't wipe its existing chat list with an
+          // empty array (see App.tsx merge logic).
+          chats: (since && userChats.length === 0) ? undefined : userChats,
           messagesMap: userMessagesMap,
+          isPartial: Boolean(since),
         });
       }
 
