@@ -200,7 +200,8 @@ async function ensureTables(db: any) {
         reply_to_text TEXT,
         reactions_json TEXT,
         is_encrypted INTEGER DEFAULT 1,
-        is_edited INTEGER DEFAULT 0
+        is_edited INTEGER DEFAULT 0,
+        updated_at TEXT
       );`),
       db.prepare(`CREATE TABLE IF NOT EXISTS push_subscriptions (
         id TEXT PRIMARY KEY,
@@ -651,8 +652,8 @@ async function getD1NewMessagesForChat(db: any, chatId: string, since?: string):
   try {
     const rows: any = since
       ? await db.prepare(
-          'SELECT * FROM messages WHERE chat_id = ? AND iso_date > ? ORDER BY iso_date ASC LIMIT 500'
-        ).bind(chatId, since).all()
+          'SELECT * FROM messages WHERE chat_id = ? AND (iso_date > ? OR updated_at > ?) ORDER BY iso_date ASC LIMIT 500'
+        ).bind(chatId, since, since).all()
       : await db.prepare(
           'SELECT * FROM messages WHERE chat_id = ? ORDER BY iso_date ASC LIMIT 500'
         ).bind(chatId).all();
@@ -758,7 +759,7 @@ async function saveD1Message(db: any, msg: ServerMessage) {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const pathname = url.pathname;
     const jwtSecret = env.JWT_SECRET || 'aarvi-secure-e2ee-jwt-secret-key-2026';
@@ -1257,7 +1258,7 @@ export default {
             if (msgRow.sender_id !== decodedUser.id) {
               return jsonResponse({ error: 'Cannot edit message from another user' }, 403);
             }
-            await env.DB.prepare('UPDATE messages SET text = ?, is_edited = 1 WHERE id = ?').bind(text, messageId).run();
+            await env.DB.prepare('UPDATE messages SET text = ?, is_edited = 1, updated_at = ? WHERE id = ?').bind(text, new Date().toISOString(), messageId).run();
             broadcastEvent('message:edit', { chatId: msgRow.chat_id, messageId, text, isEdited: true });
             return jsonResponse({ success: true, messageId, text });
           } catch (e: any) {
@@ -1325,8 +1326,8 @@ export default {
             }
             reactions = reactions.filter((r) => r.count > 0);
 
-            await env.DB.prepare('UPDATE messages SET reactions_json = ? WHERE id = ?')
-              .bind(JSON.stringify(reactions), messageId).run();
+            await env.DB.prepare('UPDATE messages SET reactions_json = ?, updated_at = ? WHERE id = ?')
+              .bind(JSON.stringify(reactions), new Date().toISOString(), messageId).run();
 
             broadcastEvent('message:react', { chatId: msgRow.chat_id, messageId, reactions });
             return jsonResponse({ success: true, reactions });
@@ -1361,8 +1362,8 @@ export default {
         if (env.DB) {
           try {
             await env.DB.prepare(
-              `UPDATE messages SET status = 'read' WHERE chat_id = ? AND sender_id != ?`
-            ).bind(chatId, currentUserId).run();
+              `UPDATE messages SET status = 'read', updated_at = ? WHERE chat_id = ? AND sender_id != ? AND status != 'read'`
+            ).bind(new Date().toISOString(), chatId, currentUserId).run();
           } catch (e) {
             console.error('Failed to update message read status in D1:', e);
           }
@@ -1556,6 +1557,24 @@ export default {
           }
           broadcastEvent('presence:change', { userId: currentUserId, status: 'online', lastSeen: nowIso });
         }
+
+        // Without this, no bytes flow on an idle connection and the
+        // browser/network treats it as dead within ~30-60s, causing the
+        // constant "Realtime Connection Re-establishing..." loop. A small
+        // SSE comment every 15s keeps it alive without triggering any
+        // client-side event handling (lines starting with ':' are ignored
+        // by EventSource per spec).
+        const keepAliveLoop = async () => {
+          while (true) {
+            await new Promise((resolve) => setTimeout(resolve, 15000));
+            try {
+              await writer.write(encoder.encode(`: keepalive\n\n`));
+            } catch {
+              break; // client disconnected — stop looping
+            }
+          }
+        };
+        ctx.waitUntil(keepAliveLoop());
 
         return new Response(readable, {
           headers: {
