@@ -647,16 +647,31 @@ async function getD1MessagesForChat(db: any, chatId: string): Promise<ServerMess
 
 // Incremental fetch used by /api/sync — only pulls messages newer than
 // `since` instead of re-reading up to 500 rows per chat on every call.
-async function getD1NewMessagesForChat(db: any, chatId: string, since?: string): Promise<ServerMessage[]> {
+async function getD1NewMessagesForChat(
+  db: any,
+  chatId: string,
+  since?: string,
+  until?: string
+): Promise<ServerMessage[]> {
   if (!db) return [];
+
   try {
     const rows: any = since
       ? await db.prepare(
-          'SELECT * FROM messages WHERE chat_id = ? AND (iso_date > ? OR updated_at > ?) ORDER BY iso_date ASC LIMIT 500'
-        ).bind(chatId, since, since).all()
+          `SELECT * FROM messages
+           WHERE chat_id = ?
+             AND updated_at > ?
+             AND (? IS NULL OR updated_at <= ?)
+           ORDER BY updated_at ASC, iso_date ASC
+           LIMIT 500`
+        ).bind(chatId, since, until || null, until || null).all()
       : await db.prepare(
-          'SELECT * FROM messages WHERE chat_id = ? ORDER BY iso_date ASC LIMIT 500'
-        ).bind(chatId).all();
+          `SELECT * FROM messages
+           WHERE chat_id = ?
+             AND (? IS NULL OR updated_at <= ?)
+           ORDER BY updated_at ASC, iso_date ASC
+           LIMIT 500`
+        ).bind(chatId, until || null, until || null).all();
 
     if (!rows || !rows.results) return [];
 
@@ -732,12 +747,24 @@ async function saveD1Chat(db: any, chat: ServerChat) {
   }
 }
 
-async function saveD1Message(db: any, msg: ServerMessage) {
+async function saveD1Message(db: any, msg: ServerMessage, updatedAt?: string) {
   if (!db) return;
+
+  const effectiveUpdatedAt =
+    updatedAt ||
+    msg.isoDate ||
+    msg.timestamp ||
+    new Date().toISOString();
+
   await db.prepare(
-    `INSERT INTO messages (id, client_msg_id, chat_id, sender_id, sender_name, text, timestamp, iso_date, status, media_url, media_type, reply_to_id, reply_to_text, reactions_json, is_encrypted, is_edited)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET text = excluded.text, reactions_json = excluded.reactions_json, is_edited = excluded.is_edited, status = excluded.status`
+    `INSERT INTO messages (id, client_msg_id, chat_id, sender_id, sender_name, text, timestamp, iso_date, status, media_url, media_type, reply_to_id, reply_to_text, reactions_json, is_encrypted, is_edited, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       text = excluded.text,
+       reactions_json = excluded.reactions_json,
+       is_edited = excluded.is_edited,
+       status = excluded.status,
+       updated_at = excluded.updated_at`
   ).bind(
     msg.id,
     msg.clientMsgId || null,
@@ -754,7 +781,8 @@ async function saveD1Message(db: any, msg: ServerMessage) {
     msg.replyToText || null,
     msg.reactions ? JSON.stringify(msg.reactions) : null,
     msg.isEncrypted ? 1 : 0,
-    msg.isEdited ? 1 : 0
+    msg.isEdited ? 1 : 0,
+    effectiveUpdatedAt
   ).run();
 }
 
@@ -1200,9 +1228,9 @@ export default {
         }
         const msgId = `msg-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-        const validIsoDate = clientIsoDate && !isNaN(new Date(clientIsoDate).getTime())
-          ? new Date(clientIsoDate).toISOString()
-          : new Date().toISOString();
+        // Never use the sender's device clock for the sync cursor.
+        // The server timestamp is authoritative for ordering and incremental sync.
+        const serverNow = new Date().toISOString();
 
         const newMsg: ServerMessage = {
           id: msgId,
@@ -1211,8 +1239,8 @@ export default {
           senderId: currentUserId,
           senderName: senderUser.name,
           text,
-          timestamp: validIsoDate,
-          isoDate: validIsoDate,
+          timestamp: serverNow,
+          isoDate: serverNow,
           status: 'sent',
           mediaType,
           mediaUrl,
@@ -1226,7 +1254,7 @@ export default {
         chat.lastMessage = newMsg;
 
         if (env.DB) {
-          await saveD1Message(env.DB, newMsg);
+          await saveD1Message(env.DB, newMsg, serverNow);
           await saveD1Chat(env.DB, chat);
         }
 
@@ -1359,18 +1387,51 @@ export default {
         const chatId = pathname.split('/')[3];
         const currentUserId = decodedUser.id;
 
+        let readMessageIds: string[] = [];
+
         if (env.DB) {
           try {
-            await env.DB.prepare(
-              `UPDATE messages SET status = 'read', updated_at = ? WHERE chat_id = ? AND sender_id != ? AND status != 'read'`
-            ).bind(new Date().toISOString(), chatId, currentUserId).run();
+            const now = new Date().toISOString();
+
+            const unreadRows: any = await env.DB.prepare(
+              `SELECT id FROM messages
+               WHERE chat_id = ?
+                 AND sender_id != ?
+                 AND status != 'read'`
+            ).bind(chatId, currentUserId).all();
+
+            readMessageIds = (unreadRows?.results || [])
+              .map((row: any) => row.id)
+              .filter(Boolean);
+
+            if (readMessageIds.length > 0) {
+              await env.DB.prepare(
+                `UPDATE messages
+                 SET status = 'read', updated_at = ?
+                 WHERE chat_id = ?
+                   AND sender_id != ?
+                   AND status != 'read'`
+              ).bind(now, chatId, currentUserId).run();
+            }
           } catch (e) {
             console.error('Failed to update message read status in D1:', e);
           }
         }
 
-        broadcastEvent('message:read', { chatId, userId: currentUserId });
-        return jsonResponse({ success: true });
+        // SSE gives an immediate receipt when both clients share an instance.
+        // Incremental /api/sync also carries the updated status, so the
+        // receipt remains reliable across Cloudflare Worker instances.
+        broadcastEvent('message:read', {
+          chatId,
+          userId: currentUserId,
+          readMessageIds
+        });
+
+        return jsonResponse({
+          success: true,
+          chatId,
+          readMessageIds
+        });
       }
 
       // 15. Typing Indicator
@@ -1438,6 +1499,11 @@ export default {
         const currentUserId = decodedUser.id;
         const since = url.searchParams.get('since') || undefined;
 
+        // Capture the upper bound before reading D1. Anything written after
+        // this point is intentionally picked up by the next sync using this
+        // timestamp as its cursor.
+        const syncCutoff = new Date().toISOString();
+
         let userChats: any[] = [];
         const userMessagesMap: Record<string, ServerMessage[]> = {};
 
@@ -1446,7 +1512,7 @@ export default {
             // First sync after login/reload: full snapshot, as before.
             userChats = await getD1ChatsForUser(env.DB, currentUserId);
             for (const c of userChats) {
-              const newMsgs = await getD1NewMessagesForChat(env.DB, c.id, since);
+              const newMsgs = await getD1NewMessagesForChat(env.DB, c.id, since, syncCutoff);
               if (newMsgs.length > 0) {
                 userMessagesMap[c.id] = newMsgs;
               }
@@ -1462,7 +1528,7 @@ export default {
 
             const changedChats: any[] = [];
             for (const cId of chatIds) {
-              const newMsgs = await getD1NewMessagesForChat(env.DB, cId, since);
+              const newMsgs = await getD1NewMessagesForChat(env.DB, cId, since, syncCutoff);
               if (newMsgs.length === 0) continue; // nothing changed — skip entirely
 
               userMessagesMap[cId] = newMsgs;
@@ -1511,7 +1577,7 @@ export default {
         }
 
         return jsonResponse({
-          timestamp: new Date().toISOString(),
+          timestamp: syncCutoff,
           // On incremental syncs, omit `chats` entirely when nothing changed
           // so the frontend doesn't wipe its existing chat list with an
           // empty array (see App.tsx merge logic).
