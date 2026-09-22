@@ -332,7 +332,10 @@ export default function App() {
   useEffect(() => {
     if (!isLoggedIn || !currentUser) return;
 
-    subscribePushManager().catch(() => {});
+    // Persist the browser's Web Push subscription for this exact user.
+    // Passing the real AARVI JWT is important; notifications.ts also has a
+    // storage fallback for older builds.
+    subscribePushManager(getAuthToken() || undefined).catch(() => {});
 
     apiFetchChats()
       .then((data) => {
