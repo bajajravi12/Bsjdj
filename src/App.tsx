@@ -1015,6 +1015,158 @@ export default function App() {
                   }
 
                   if (
+                    syncRes.messagesMap
+                  ) {
+                    for (
+                      const [
+                        cId,
+                        msgs
+                      ] of Object.entries(
+                        syncRes.messagesMap
+                      )
+                    ) {
+                      const incomingMsgs =
+                        msgs as Message[];
+
+                      for (
+                        const msg of
+                          incomingMsgs
+                      ) {
+                        if (
+                          msg.senderId !==
+                            currentUser.id &&
+                          !isMessageNotified(
+                            msg.id
+                          )
+                        ) {
+                          markMessageAsNotified(
+                            msg.id
+                          );
+
+                          const msgTime =
+                            new Date(
+                              msg.isoDate ||
+                              msg.timestamp
+                            ).getTime();
+
+                          if (
+                            msgTime >=
+                            sessionStartTimeRef.current -
+                              10000
+                          ) {
+                            const isViewingCurrentChat =
+                              activeChatIdRef.current ===
+                                cId &&
+                              document.hasFocus();
+
+                            if (
+                              !isViewingCurrentChat &&
+                              appSettings.notifications !==
+                                false
+                            ) {
+                              const targetChat =
+                                (
+                                  chatsRef.current ||
+                                  []
+                                ).find(
+                                  (
+                                    chat
+                                  ) =>
+                                    chat.id ===
+                                    cId
+                                );
+
+                              const otherMember =
+                                (
+                                  targetChat?.members ||
+                                  []
+                                ).find(
+                                  (
+                                    member
+                                  ) =>
+                                    member.id ===
+                                    msg.senderId
+                                );
+
+                              const senderName =
+                                msg.senderName ||
+                                otherMember?.name ||
+                                targetChat?.name ||
+                                'AARVI User';
+
+                              const senderAvatar =
+                                msg.senderAvatar ||
+                                otherMember?.avatar ||
+                                targetChat?.avatar;
+
+                              const previewText =
+                                msg.text ||
+                                (
+                                  msg.mediaType
+                                    ? `[${msg.mediaType.toUpperCase()}]`
+                                    : 'Sent a message'
+                                );
+
+                              showNativeNotification(
+                                `AARVI: ${senderName}`,
+                                {
+                                  body:
+                                    previewText,
+                                  senderName,
+                                  avatarUrl:
+                                    senderAvatar,
+                                  chatId:
+                                    cId,
+                                  messageId:
+                                    msg.id
+                                }
+                              );
+                            }
+                          }
+                        }
+                      }
+                    }
+
+                    setMessagesMap(
+                      (
+                        prevMap
+                      ) => {
+                        const nextMap = {
+                          ...prevMap
+                        };
+
+                        let updated =
+                          false;
+
+                        for (
+                          const [
+                            cId,
+                            msgs
+                          ] of Object.entries(
+                            syncRes.messagesMap
+                          )
+                        ) {
+                          const merged =
+                            mergeServerAndLocalMessages(
+                              prevMap[cId] ||
+                                [],
+                              msgs as Message[]
+                            );
+
+                          nextMap[cId] =
+                            merged;
+
+                          updated = true;
+                        }
+
+                        return updated
+                          ? nextMap
+                          : prevMap;
+                      }
+                    );
+                  }
+
+                  if (
                     syncRes.timestamp
                   ) {
                     lastSyncTimestampRef.current =
