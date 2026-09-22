@@ -137,7 +137,15 @@ export async function subscribePushManager(authToken?: string): Promise<PushSubs
     }
 
     // 3. Persist subscription on backend
-    const token = authToken || localStorage.getItem('aarvi_token') || sessionStorage.getItem('aarvi_token');
+    // AARVI auth is stored under aarvi_jwt_token.
+    // Keep the explicit token as the primary source so the push subscription
+    // is always saved against the currently logged-in user.
+    const token =
+      authToken ||
+      localStorage.getItem('aarvi_jwt_token') ||
+      sessionStorage.getItem('aarvi_jwt_token') ||
+      localStorage.getItem('aarvi_token') ||
+      sessionStorage.getItem('aarvi_token');
     if (token && subscription) {
       const subJson = subscription.toJSON();
       await fetch('/api/push/subscribe', {
