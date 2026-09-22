@@ -566,18 +566,11 @@ export default function App() {
                       chatId
                     ] || []
                   ).map((m) =>
-                    (
-                      !readMessageIds ||
-                      readMessageIds.length ===
-                        0 ||
-                      readMessageIds.includes(
-                        m.id
-                      )
-                    )
+                    readMessageIds &&
+                    readMessageIds.includes(m.id)
                       ? {
                           ...m,
-                          status:
-                            'read'
+                          status: 'read'
                         }
                       : m
                   )
@@ -969,7 +962,7 @@ export default function App() {
    * Background fallback sync.
    *
    * SSE handles realtime.
-   * This runs every 30 seconds only as recovery.
+   * This runs every 5 seconds as a reliable cross-instance fallback.
    */
   useEffect(() => {
     if (!isLoggedIn || !currentUser) {
