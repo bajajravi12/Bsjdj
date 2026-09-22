@@ -1480,6 +1480,28 @@ export default function App() {
                     )
                 })
               );
+
+              // Also refresh the home-list preview for this chat —
+              // opening a chat used to update messagesMap only, so
+              // going back to the list could still show a stale
+              // lastMessage until the next background poll caught up.
+              const freshLast =
+                mRes.messages[
+                  mRes.messages.length - 1
+                ];
+
+              if (freshLast) {
+                setChats((prev) =>
+                  (prev || []).map((chat) =>
+                    chat.id === chatId
+                      ? {
+                          ...chat,
+                          lastMessage: freshLast
+                        }
+                      : chat
+                  )
+                );
+              }
             }
           }
         )
