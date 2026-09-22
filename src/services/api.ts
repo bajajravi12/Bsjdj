@@ -307,7 +307,8 @@ export const apiSendMessage = async (
       `cmsg-${Date.now()}-${Math.random()
         .toString(36)
         .slice(2, 10)}`,
-    isoDate: new Date().toISOString(),
+    // The Worker assigns the authoritative server timestamp.
+    // Keeping client clocks out of the sync cursor prevents missed messages.
   };
 
   const maxAttempts = 3;
