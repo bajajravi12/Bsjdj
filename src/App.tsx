@@ -949,6 +949,15 @@ export default function App() {
             }
             isSyncingRef.current = true;
 
+            // Safety net: if the request hangs (flaky network / mid
+            // reconnect), force the guard open again after 15s so
+            // future syncs (interval or reconnect) don't get stuck
+            // forever waiting on a request that will never resolve.
+            const syncSafetyTimer =
+              setTimeout(() => {
+                isSyncingRef.current = false;
+              }, 15000);
+
             apiSync(
               lastSyncTimestampRef.current
             )
@@ -1176,6 +1185,7 @@ export default function App() {
               )
               .catch(() => {})
               .finally(() => {
+                clearTimeout(syncSafetyTimer);
                 isSyncingRef.current = false;
               });
           }
@@ -1208,6 +1218,14 @@ export default function App() {
           return;
         }
         isSyncingRef.current = true;
+
+        // Same safety net as the reconnect sync: if this request
+        // hangs, don't let it block the interval forever.
+        const syncSafetyTimer =
+          setTimeout(() => {
+            isSyncingRef.current = false;
+          }, 15000);
+
         try {
           const syncRes =
             await apiSync(
@@ -1434,6 +1452,7 @@ export default function App() {
 
         } catch {
         } finally {
+          clearTimeout(syncSafetyTimer);
           isSyncingRef.current = false;
         }
       };
