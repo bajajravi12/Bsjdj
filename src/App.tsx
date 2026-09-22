@@ -1463,12 +1463,16 @@ export default function App() {
     pollSync();
 
     /*
-     * Reduced database polling.
+     * Polling is now the primary realtime mechanism (5s), since SSE
+     * broadcast via in-memory activeStreams only works when sender and
+     * recipient happen to land on the same Worker instance — which
+     * Cloudflare does not guarantee. Incremental /api/sync makes this
+     * cheap even at this frequency (usually 0 new rows per call).
      */
     const syncInterval =
       setInterval(
         pollSync,
-        30000
+        5000
       );
 
     const handleVisibilityChange =
