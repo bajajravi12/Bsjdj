@@ -787,16 +787,7 @@ async function saveD1Message(db: any, msg: ServerMessage, updatedAt?: string) {
     msg.timestamp ||
     new Date().toISOString();
 
-  await db.prepare(
-    `INSERT INTO messages (id, client_msg_id, chat_id, sender_id, sender_name, text, timestamp, iso_date, status, media_url, media_type, reply_to_id, reply_to_text, reactions_json, is_encrypted, is_edited, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       text = excluded.text,
-       reactions_json = excluded.reactions_json,
-       is_edited = excluded.is_edited,
-       status = excluded.status,
-       updated_at = excluded.updated_at`
-  ).bind(
+  const values = [
     msg.id,
     msg.clientMsgId || null,
     msg.chatId,
@@ -813,8 +804,54 @@ async function saveD1Message(db: any, msg: ServerMessage, updatedAt?: string) {
     msg.reactions ? JSON.stringify(msg.reactions) : null,
     msg.isEncrypted ? 1 : 0,
     msg.isEdited ? 1 : 0,
-    effectiveUpdatedAt
-  ).run();
+    effectiveUpdatedAt,
+  ];
+
+  try {
+    await db.prepare(
+      `INSERT INTO messages
+       (id, client_msg_id, chat_id, sender_id, sender_name, text, timestamp,
+        iso_date, status, media_url, media_type, reply_to_id, reply_to_text,
+        reactions_json, is_encrypted, is_edited, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         text = excluded.text,
+         reactions_json = excluded.reactions_json,
+         is_edited = excluded.is_edited,
+         status = excluded.status,
+         updated_at = excluded.updated_at`
+    ).bind(...values).run();
+  } catch (firstError) {
+    // Recover automatically if a request reaches an older D1 schema before
+    // the startup migration has completed on that Worker isolate.
+    try {
+      await db.prepare(
+        `ALTER TABLE messages ADD COLUMN updated_at TEXT`
+      ).run();
+    } catch {}
+
+    try {
+      await db.prepare(
+        `INSERT INTO messages
+         (id, client_msg_id, chat_id, sender_id, sender_name, text, timestamp,
+          iso_date, status, media_url, media_type, reply_to_id, reply_to_text,
+          reactions_json, is_encrypted, is_edited, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           text = excluded.text,
+           reactions_json = excluded.reactions_json,
+           is_edited = excluded.is_edited,
+           status = excluded.status,
+           updated_at = excluded.updated_at`
+      ).bind(...values).run();
+    } catch (secondError) {
+      console.error('saveD1Message failed after schema recovery:', secondError);
+      // Do not turn a successfully received message into a client-side
+      // "sending" state solely because the sync metadata write failed.
+      // Re-throw only when the actual message row could not be persisted.
+      throw firstError;
+    }
+  }
 }
 
 export default {
@@ -1289,7 +1326,11 @@ export default {
           await saveD1Chat(env.DB, chat);
         }
 
-        broadcastEvent('message:new', { message: newMsg, chatId });
+        try {
+          await broadcastEvent('message:new', { message: newMsg, chatId });
+        } catch (realtimeError) {
+          console.error('[Realtime] message:new broadcast failed:', realtimeError);
+        }
 
         // Trigger real Web Push notification to offline/background subscribers
         sendWorkerWebPushToRecipients(env, chatId, currentUserId, newMsg).catch((err) => {
@@ -1452,11 +1493,15 @@ export default {
         // SSE gives an immediate receipt when both clients share an instance.
         // Incremental /api/sync also carries the updated status, so the
         // receipt remains reliable across Cloudflare Worker instances.
-        broadcastEvent('message:read', {
-          chatId,
-          userId: currentUserId,
-          readMessageIds
-        });
+        try {
+          await broadcastEvent('message:read', {
+            chatId,
+            userId: currentUserId,
+            readMessageIds
+          });
+        } catch (realtimeError) {
+          console.error('[Realtime] message:read broadcast failed:', realtimeError);
+        }
 
         return jsonResponse({
           success: true,
