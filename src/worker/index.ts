@@ -219,6 +219,37 @@ async function ensureTables(db: any) {
       db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_members_user ON chat_members(user_id);`),
       db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_members_chat ON chat_members(chat_id);`)
     ]);
+
+    // Existing D1 databases are not altered by CREATE TABLE IF NOT EXISTS.
+    // Add updated_at to older installations before any message write uses it.
+    try {
+      const columns: any = await db.prepare(`PRAGMA table_info(messages)`).all();
+      const hasUpdatedAt = (columns?.results || []).some(
+        (column: any) => column.name === 'updated_at'
+      );
+
+      if (!hasUpdatedAt) {
+        await db.prepare(
+          `ALTER TABLE messages ADD COLUMN updated_at TEXT`
+        ).run();
+      }
+
+      await db.prepare(
+        `CREATE INDEX IF NOT EXISTS idx_messages_chat_updated
+         ON messages(chat_id, updated_at)`
+      ).run();
+
+      // Backfill legacy rows so incremental sync can see old messages too.
+      await db.prepare(
+        `UPDATE messages
+         SET updated_at = COALESCE(updated_at, iso_date)
+         WHERE updated_at IS NULL`
+      ).run();
+    } catch (migrationError) {
+      console.error('Messages updated_at migration failed:', migrationError);
+      throw migrationError;
+    }
+
     tablesInitialized = true;
   } catch (err) {
     console.error('Failed to initialize D1 tables:', err);
