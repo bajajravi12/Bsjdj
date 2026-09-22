@@ -216,6 +216,7 @@ async function ensureTables(db: any) {
       // Without these, every "WHERE chat_id = ?" query did a full table scan.
       db.prepare(`CREATE INDEX IF NOT EXISTS idx_messages_chat_id_iso ON messages(chat_id, iso_date);`),
       db.prepare(`CREATE INDEX IF NOT EXISTS idx_messages_chat_status ON messages(chat_id, status);`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);`),
       db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_members_user ON chat_members(user_id);`),
       db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_members_chat ON chat_members(chat_id);`)
     ]);
