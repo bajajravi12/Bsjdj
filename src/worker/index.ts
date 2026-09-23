@@ -657,8 +657,12 @@ async function getD1ChatsForUser(db: any, userId: string): Promise<any[]> {
 async function getD1MessagesForChat(db: any, chatId: string): Promise<ServerMessage[]> {
   if (!db) return [];
   try {
+    // Load the newest 500 messages, not the oldest 500.
+    // If a chat has more than 500 messages, ASC + LIMIT 500 makes every
+    // newly sent message disappear from the restored history because only
+    // the oldest rows are returned.
     const rows: any = await db.prepare(
-      'SELECT * FROM messages WHERE chat_id = ? ORDER BY iso_date ASC LIMIT 500'
+      'SELECT * FROM messages WHERE chat_id = ? ORDER BY iso_date DESC LIMIT 500'
     ).bind(chatId).all();
 
     if (!rows || !rows.results) return [];
@@ -681,6 +685,8 @@ async function getD1MessagesForChat(db: any, chatId: string): Promise<ServerMess
       isEncrypted: Boolean(m.is_encrypted),
       isEdited: Boolean(m.is_edited),
     }));
+    // D1 returned newest-first; the UI expects chronological order.
+    msgs.reverse();
     messagesDb[chatId] = msgs;
     return msgs;
   } catch (err) {
