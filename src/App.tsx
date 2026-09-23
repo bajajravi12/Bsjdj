@@ -332,49 +332,99 @@ export default function App() {
   useEffect(() => {
     if (!isLoggedIn || !currentUser) return;
 
+    // Every login/session must start a fresh server sync cursor.
+    // Otherwise a second login in the same SPA session could reuse an old
+    // incremental cursor and miss the account's existing chat snapshot.
+    lastSyncTimestampRef.current = '';
+
     // Persist the browser's Web Push subscription for this exact user.
     // Passing the real AARVI JWT is important; notifications.ts also has a
     // storage fallback for older builds.
     subscribePushManager(getAuthToken() || undefined).catch(() => {});
 
-    apiFetchChats()
-      .then((data) => {
-        const fetchedChats =
-          data.chats || [];
+    const loadAccountData = async () => {
+      let fetchedChats: Chat[] = [];
 
-        setChats(fetchedChats);
-
-        fetchedChats.forEach(
-          (chat: Chat) => {
-            apiFetchMessages(chat.id)
-              .then((mRes) => {
-                if (
-                  mRes &&
-                  mRes.messages
-                ) {
-                  seedHistoricMessageIds(
-                    mRes.messages.map(
-                      (m: Message) => m.id
-                    )
-                  );
-
-                  setMessagesMap(
-                    (prev) => ({
-                      ...prev,
-                      [chat.id]:
-                        mergeServerAndLocalMessages(
-                          prev[chat.id] || [],
-                          mRes.messages
-                        )
-                    })
-                  );
-                }
-              })
-              .catch(() => {});
+      // A transient /api/chats failure must never make an existing account
+      // appear to have no conversations. Retry before accepting an empty
+      // result as authoritative.
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const data = await apiFetchChats();
+          if (data && Array.isArray(data.chats)) {
+            fetchedChats = data.chats;
+            if (fetchedChats.length > 0 || attempt === 3) {
+              break;
+            }
           }
-        );
-      })
-      .catch(() => {});
+        } catch {}
+
+        if (attempt < 3) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, 400 * attempt)
+          );
+        }
+      }
+
+      // Use a fresh full sync as a second source of truth. This is
+      // especially important on another device where there is no local
+      // chat cache.
+      try {
+        const syncRes = await apiSync();
+        if (
+          syncRes &&
+          Array.isArray(syncRes.chats) &&
+          syncRes.chats.length > 0
+        ) {
+          const chatMap = new Map<string, Chat>();
+
+          for (const chat of fetchedChats) {
+            chatMap.set(chat.id, chat);
+          }
+
+          for (const chat of syncRes.chats as Chat[]) {
+            chatMap.set(chat.id, chat);
+          }
+
+          fetchedChats = Array.from(chatMap.values());
+        }
+      } catch {}
+
+      setChats(fetchedChats);
+
+      // Load the complete persisted message history for every restored chat.
+      fetchedChats.forEach(
+        (chat: Chat) => {
+          apiFetchMessages(chat.id)
+            .then((mRes) => {
+              if (
+                mRes &&
+                mRes.messages
+              ) {
+                seedHistoricMessageIds(
+                  mRes.messages.map(
+                    (m: Message) => m.id
+                  )
+                );
+
+                setMessagesMap(
+                  (prev) => ({
+                    ...prev,
+                    [chat.id]:
+                      mergeServerAndLocalMessages(
+                        prev[chat.id] || [],
+                        mRes.messages
+                      )
+                  })
+                );
+              }
+            })
+            .catch(() => {});
+        }
+      );
+    };
+
+    loadAccountData().catch(() => {});
   }, [
     isLoggedIn,
     currentUser?.id
@@ -2095,6 +2145,10 @@ export default function App() {
    */
   const handleLogout =
     () => {
+      // Reset the incremental sync cursor so the next login always restores
+      // the complete account/chat snapshot from D1.
+      lastSyncTimestampRef.current = '';
+
       clearAuthToken();
 
       try {
