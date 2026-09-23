@@ -373,8 +373,7 @@ export default function App() {
         const syncRes = await apiSync();
         if (
           syncRes &&
-          Array.isArray(syncRes.chats) &&
-          syncRes.chats.length > 0
+          Array.isArray(syncRes.chats)
         ) {
           const chatMap = new Map<string, Chat>();
 
@@ -387,6 +386,12 @@ export default function App() {
           }
 
           fetchedChats = Array.from(chatMap.values());
+
+          // Save the server cursor from the initial snapshot. Without this,
+          // the first background poll can accidentally run another full sync.
+          if (syncRes.timestamp) {
+            lastSyncTimestampRef.current = syncRes.timestamp;
+          }
         }
       } catch {}
 
@@ -1082,18 +1087,22 @@ export default function App() {
                     })
                   );
 
-                // Partial sync: server only sent chats that
-                // actually changed — merge into existing list.
+                // Partial sync: server only sent chats that actually
+                // changed — merge into existing list.
                 if (syncRes.isPartial) {
-                  const updatedMap =
-                    new Map(
-                      updated.map(
-                        (c: Chat) => [c.id, c]
-                      )
-                    );
+                  const updatedMap = new Map(
+                    updated.map((c: Chat) => [c.id, c])
+                  );
                   return (prevChats || []).map(
                     (c) => updatedMap.get(c.id) || c
                   );
+                }
+
+                // A transient/failed full sync must NEVER erase a known
+                // chat list. D1 is persistent; an empty response here is
+                // not proof that the account has no chats.
+                if (updated.length === 0 && (prevChats || []).length > 0) {
+                  return prevChats || [];
                 }
 
                 return updated;
