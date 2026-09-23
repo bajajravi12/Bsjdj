@@ -80,6 +80,18 @@ const AVATAR_COLORS = [
   '#0891b2', '#0d9488', '#4f46e5', '#ea580c', '#65a30d'
 ];
 
+
+function parseReactionsJson(value: any): ServerReaction[] {
+  if (!value) return [];
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.warn('[D1] Invalid reactions_json; preserving message without reactions');
+    return [];
+  }
+}
+
 function getInitials(name: string): string {
   if (!name || !name.trim()) return 'U';
   const parts = name.trim().split(/\s+/);
@@ -533,7 +545,7 @@ async function getD1ChatById(db: any, chatId: string): Promise<ServerChat | null
         mediaType: lastMsgRow.media_type,
         replyToId: lastMsgRow.reply_to_id,
         replyToText: lastMsgRow.reply_to_text,
-        reactions: lastMsgRow.reactions_json ? JSON.parse(lastMsgRow.reactions_json) : [],
+        reactions: parseReactionsJson(lastMsgRow.reactions_json),
         isEncrypted: Boolean(lastMsgRow.is_encrypted),
         isEdited: Boolean(lastMsgRow.is_edited),
       };
@@ -665,7 +677,7 @@ async function getD1MessagesForChat(db: any, chatId: string): Promise<ServerMess
       mediaType: m.media_type,
       replyToId: m.reply_to_id,
       replyToText: m.reply_to_text,
-      reactions: m.reactions_json ? JSON.parse(m.reactions_json) : [],
+      reactions: parseReactionsJson(m.reactions_json),
       isEncrypted: Boolean(m.is_encrypted),
       isEdited: Boolean(m.is_edited),
     }));
@@ -721,7 +733,7 @@ async function getD1NewMessagesForChat(
       mediaType: m.media_type,
       replyToId: m.reply_to_id,
       replyToText: m.reply_to_text,
-      reactions: m.reactions_json ? JSON.parse(m.reactions_json) : [],
+      reactions: parseReactionsJson(m.reactions_json),
       isEncrypted: Boolean(m.is_encrypted),
       isEdited: Boolean(m.is_edited),
     }));
