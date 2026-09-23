@@ -174,31 +174,23 @@ export const apiFetchChats = async () => {
   const token = getAuthToken();
 
   if (!token) {
-    return {
-      chats: [],
-    };
+    throw new Error('Not authenticated');
   }
 
-  try {
-    const res = await fetch(`${API_BASE}/chats`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      cache: 'no-store',
-    });
+  const res = await fetch(API_BASE + '/chats', {
+    headers: {
+      Authorization: 'Bearer ' + token,
+    },
+    cache: 'no-store',
+  });
 
-    if (!res.ok) {
-      return {
-        chats: [],
-      };
-    }
+  const data = await parseResponseJson(res);
 
-    return await parseResponseJson(res);
-  } catch {
-    return {
-      chats: [],
-    };
+  if (!res.ok) {
+    throw new Error(data.error || ('Failed to load chats (' + res.status + ')'));
   }
+
+  return data;
 };
 
 export const apiCreateChat = async (params: {
@@ -242,34 +234,26 @@ export const apiFetchMessages = async (
   const token = getAuthToken();
 
   if (!token) {
-    return {
-      messages: [],
-    };
+    throw new Error('Not authenticated');
   }
 
-  try {
-    const res = await fetch(
-      `${API_BASE}/chats/${encodeURIComponent(chatId)}/messages`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        cache: 'no-store',
-      }
-    );
-
-    if (!res.ok) {
-      return {
-        messages: [],
-      };
+  const res = await fetch(
+    API_BASE + '/chats/' + encodeURIComponent(chatId) + '/messages',
+    {
+      headers: {
+        Authorization: 'Bearer ' + token,
+      },
+      cache: 'no-store',
     }
+  );
 
-    return await parseResponseJson(res);
-  } catch {
-    return {
-      messages: [],
-    };
+  const data = await parseResponseJson(res);
+
+  if (!res.ok) {
+    throw new Error(data.error || ('Failed to load messages (' + res.status + ')'));
   }
+
+  return data;
 };
 
 // ======================================================
