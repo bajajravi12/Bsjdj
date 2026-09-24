@@ -2372,7 +2372,7 @@ export default function App() {
         </div>
 
         <div
-          className={`flex-1 h-full flex flex-col ${
+          className={`flex-1 min-w-0 h-full flex flex-col ${
             !activeChatId
               ? 'hidden md:flex'
               : 'flex'
