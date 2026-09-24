@@ -4,22 +4,34 @@
   html, body, #root {
     width: 100%;
     max-width: 100vw;
+    min-width: 0;
     height: 100%;
     height: 100dvh;
     margin: 0;
     padding: 0;
     overflow: hidden;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
     box-sizing: border-box;
   }
 
+  html, body {
+    min-height: 100%;
+  }
+
+  #root {
+    min-height: 100dvh;
+  }
+
   *, ::before, ::after {
     box-sizing: border-box;
+  }
+
+  img, video, canvas, svg {
+    max-width: 100%;
+  }
+
+  input, textarea, select, button {
+    max-width: 100%;
   }
 }
