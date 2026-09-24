@@ -338,7 +338,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const displayAvatar = getDisplayAvatar(chat.name, chat.avatar, chat.id);
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-slate-950 relative overflow-hidden font-sans select-none">
+    <div className="flex-1 min-w-0 min-h-0 flex flex-col h-full bg-slate-950 relative overflow-hidden font-sans select-none">
       {/* Toast Feedback */}
       {toastMsg && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-emerald-500 text-slate-950 px-4 py-1.5 rounded-full font-bold text-xs shadow-xl animate-fade-in flex items-center gap-1.5">
@@ -348,8 +348,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       )}
 
       {/* Header */}
-      <div className="p-3.5 bg-slate-900 border-b border-slate-800/80 flex items-center justify-between z-20 shadow-sm">
-        <div className="flex items-center space-x-3">
+      <div className="p-3 bg-slate-900 border-b border-slate-800/80 flex items-center justify-between gap-2 z-20 shadow-sm min-w-0">
+        <div className="flex items-center space-x-2.5 min-w-0 flex-1">
           {onBackToChatList && (
             <button
               onClick={onBackToChatList}
@@ -359,7 +359,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             </button>
           )}
 
-          <div className="relative">
+          <div className="relative flex-shrink-0">
             <img
               src={displayAvatar}
               alt={chat.name}
@@ -372,16 +372,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             )}
           </div>
 
-          <div>
-            <div className="flex items-center space-x-1.5">
-              <h3 className="font-bold text-sm text-slate-100">{chat.name}</h3>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center space-x-1.5 min-w-0">
+              <h3 className="font-bold text-sm text-slate-100 truncate">{chat.name}</h3>
               {chat.isSecret && (
                 <span className="bg-amber-500/20 text-amber-300 text-[10px] font-semibold px-1.5 py-0.2 rounded border border-amber-500/30 flex items-center gap-0.5">
                   <Flame className="w-2.5 h-2.5" /> Secret Vault
                 </span>
               )}
             </div>
-            <div className="text-[11px] font-medium flex items-center gap-2">
+            <div className="text-[11px] font-medium flex items-center gap-1.5 min-w-0 truncate">
               {chat.isTyping ? (
                 <span className="text-emerald-400 font-semibold italic flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -395,7 +395,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 <span className="text-slate-400">{presenceInfo.text}</span>
               )}
               <span className="text-slate-600">&bull;</span>
-              <span className="text-slate-500 font-mono text-[10px]">
+              <span className="hidden sm:inline text-slate-500 font-mono text-[10px] truncate">
                 E2EE Key: {chat.encryptionFingerprint.slice(0, 10)}...
               </span>
             </div>
@@ -403,8 +403,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         </div>
 
         {/* Header Actions */}
-        <div className="flex items-center space-x-1.5 sm:space-x-2">
-          <div className="flex items-center space-x-1 bg-slate-950 px-2 py-1 rounded-lg border border-slate-800 text-xs">
+        <div className="flex items-center space-x-1 sm:space-x-2 flex-shrink-0">
+          <div className="hidden sm:flex items-center space-x-1 bg-slate-950 px-2 py-1 rounded-lg border border-slate-800 text-xs flex-shrink-0">
             <Clock className="w-3.5 h-3.5 text-amber-400" />
             <select
               value={chat.selfDestructTimer || 0}
@@ -457,7 +457,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       <div 
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900/60 relative"
+        className="flex-1 min-w-0 min-h-0 overflow-y-auto p-3 sm:p-4 space-y-3.5 bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900/60 relative"
       >
         <div className="text-center my-2">
           <span className="bg-slate-900/90 text-slate-400 text-[10px] font-semibold uppercase tracking-wider px-3 py-1 rounded-full border border-slate-800">
@@ -492,7 +492,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 onTouchMove={handleTouchEnd}
               >
                 <div
-                  className={`max-w-[85%] sm:max-w-[70%] rounded-2xl p-3.5 shadow-md relative transition-all ${
+                  className={`min-w-0 max-w-[88%] sm:max-w-[70%] rounded-2xl p-3.5 shadow-md relative transition-all break-words overflow-hidden ${
                     isSelf
                       ? 'bg-emerald-600 text-white rounded-br-none'
                       : 'bg-slate-900 text-slate-100 border border-slate-800 rounded-bl-none'
@@ -564,7 +564,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
                   {/* Text Body */}
                   {!isLocation && (
-                    <p className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">
+                    <p className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap break-words">
                       {msg.text}
                     </p>
                   )}
@@ -725,7 +725,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           </div>
         )}
 
-        <form onSubmit={handleSend} className="flex items-center space-x-2">
+        <form onSubmit={handleSend} className="flex items-center space-x-2 min-w-0">
           <button
             type="button"
             onClick={() => setShowAttachMenu(!showAttachMenu)}
@@ -764,7 +764,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
               value={inputText}
               onChange={handleInputChange}
               placeholder={editingMessage ? 'Update message...' : 'Write an encrypted message...'}
-              className="flex-1 bg-slate-950 border border-slate-800 text-slate-100 text-xs sm:text-sm rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="flex-1 min-w-0 w-0 bg-slate-950 border border-slate-800 text-slate-100 text-xs sm:text-sm rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
           )}
 
