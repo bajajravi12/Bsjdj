@@ -519,7 +519,6 @@ export const apiGetPushStatus = async () => {
   const res = await fetch(`${API_BASE}/push/status`, {
     headers: {
       Authorization: `Bearer ${token}`,
-      cache: 'no-store',
     },
     cache: 'no-store',
   });
