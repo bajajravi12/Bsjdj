@@ -1,5 +1,5 @@
 // AARVI Production Messenger Service Worker for Push Notifications, PWA Standalone Launch & Offline Caching
-const CACHE_NAME = 'aarvi-messenger-v2';
+const CACHE_NAME = 'aarvi-messenger-v3';
 
 const PRECACHE_ASSETS = [
   '/',
@@ -145,7 +145,8 @@ self.addEventListener('push', (event) => {
       body: data.body || 'New encrypted message received',
       icon: data.icon || '/icon-192.png',
       badge: '/icon-192.png',
-      tag: data.tag || (data.chatId ? `aarvi-chat-${data.chatId}` : 'aarvi-msg'),
+      tag: data.tag || (data.messageId ? `aarvi-msg-${data.messageId}` : (data.chatId ? `aarvi-chat-${data.chatId}` : 'aarvi-msg')),
+      renotify: true,
       data: {
         chatId: data.chatId,
         messageId: data.messageId,
