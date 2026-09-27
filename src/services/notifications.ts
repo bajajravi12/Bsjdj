@@ -219,16 +219,17 @@ export async function showNativeNotification(title: string, options: ShowNotific
     return false;
   }
 
-  // Prevent duplicate notifications for the same message ID
-  if (options.messageId) {
-    if (notifiedMessageIds.has(options.messageId)) {
-      return false;
-    }
-    notifiedMessageIds.add(options.messageId);
-    persistNotifiedIds();
+  // Prevent duplicate notifications for the same message ID.
+  // Mark only after the browser actually accepts the notification.
+  if (options.messageId && notifiedMessageIds.has(options.messageId)) {
+    return false;
   }
 
-  const notificationTag = options.tag || (options.chatId ? `aarvi-chat-${options.chatId}` : 'aarvi-msg');
+  // Use a unique tag per message. A chat-level tag makes Chrome replace
+  // the previous notification instead of alerting for each new message.
+  const notificationTag = options.tag || (options.messageId
+    ? `aarvi-msg-${options.messageId}`
+    : (options.chatId ? `aarvi-chat-${options.chatId}` : 'aarvi-msg'));
   const icon = options.avatarUrl || '/icon.png';
 
   const notificationOptions: any = {
@@ -236,6 +237,7 @@ export async function showNativeNotification(title: string, options: ShowNotific
     icon,
     badge: icon,
     tag: notificationTag,
+    renotify: true,
     data: {
       chatId: options.chatId,
       messageId: options.messageId,
@@ -258,6 +260,10 @@ export async function showNativeNotification(title: string, options: ShowNotific
 
     if (reg && reg.showNotification) {
       await reg.showNotification(title, notificationOptions);
+      if (options.messageId) {
+        notifiedMessageIds.add(options.messageId);
+        persistNotifiedIds();
+      }
       return true;
     }
   } catch (swErr) {
@@ -275,6 +281,10 @@ export async function showNativeNotification(title: string, options: ShowNotific
         (window as any).__aarvi_openChat(options.chatId);
       }
     };
+    if (options.messageId) {
+      notifiedMessageIds.add(options.messageId);
+      persistNotifiedIds();
+    }
     return true;
   } catch (notifErr) {
     console.warn('[AARVI] Notification constructor fallback failed:', notifErr);
