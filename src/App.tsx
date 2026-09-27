@@ -29,6 +29,7 @@ import {
   apiReactToMessage,
   apiPinMessage,
   apiSendPresence,
+  apiGetTyping,
   subscribeRealtimeEvents,
   apiSync,
   clearAuthToken,
@@ -1135,10 +1136,6 @@ export default function App() {
                     msg.id
                   )
                 ) {
-                  markMessageAsNotified(
-                    msg.id
-                  );
-
                   const msgTime =
                     new Date(
                       msg.isoDate ||
@@ -1334,6 +1331,40 @@ export default function App() {
     isLoggedIn,
     currentUser?.id
   ]);
+
+  /*
+   * Typing fallback for Cloudflare Worker instances.
+   * SSE is still the instant path; this short poll reads durable D1 state
+   * when sender and recipient land on different Worker instances.
+   */
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser || !activeChatId) return;
+
+    let stopped = false;
+    const pollTyping = async () => {
+      const result = await apiGetTyping(activeChatId);
+      if (stopped) return;
+
+      const typing = result?.typing;
+      setChats((prev) => (prev || []).map((chat) =>
+        chat.id === activeChatId
+          ? {
+              ...chat,
+              isTyping: Boolean(typing),
+              typingUserName: typing?.userName || undefined,
+            }
+          : chat
+      ));
+    };
+
+    pollTyping();
+    const timer = setInterval(pollTyping, 1500);
+
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [isLoggedIn, currentUser?.id, activeChatId]);
 
   /*
    * Presence heartbeat.
