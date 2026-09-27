@@ -37,9 +37,24 @@ jobs:
 
       - name: Configure Bubblewrap for CI
         run: |
+          # Bubblewrap expects an Android command-line-tools layout with a
+          # "tools" directory inside the configured SDK root. GitHub's
+          # android-actions/setup-android keeps the tools under cmdline-tools.
+          BW_SDK="$RUNNER_TEMP/bubblewrap-android-sdk"
+          mkdir -p "$BW_SDK"
+          ln -s "$ANDROID_HOME/cmdline-tools/latest" "$BW_SDK/tools"
+          for dir in build-tools platform-tools platforms licenses; do
+            if [ -d "$ANDROID_HOME/$dir" ]; then
+              ln -s "$ANDROID_HOME/$dir" "$BW_SDK/$dir"
+            fi
+          done
           mkdir -p "$HOME/.bubblewrap"
-          printf '%s\n' '{' '  "jdkPath": "'"$JAVA_HOME"'",' '  "androidSdkPath": "'"$ANDROID_HOME"'"' '}' > "$HOME/.bubblewrap/config.json"
+          printf '%s\n' '{' '  "jdkPath": "'"$JAVA_HOME"'",' '  "androidSdkPath": "'"$BW_SDK"'"' '}' > "$HOME/.bubblewrap/config.json"
+          echo "Bubblewrap config:"
           cat "$HOME/.bubblewrap/config.json"
+          echo "SDK layout:"
+          ls -la "$BW_SDK"
+          ls -la "$BW_SDK/tools"
           bubblewrap doctor
 
       - name: Prepare TWA manifest
