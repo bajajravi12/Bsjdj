@@ -224,6 +224,14 @@ async function ensureTables(db: any) {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(user_id, endpoint)
       );`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS typing_status (
+        chat_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        user_name TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (chat_id, user_id)
+      );`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_typing_chat_expires ON typing_status(chat_id, expires_at);`),
       // --- Indexes added to fix D1 free-tier read-limit exhaustion ---
       // Without these, every "WHERE chat_id = ?" query did a full table scan.
       db.prepare(`CREATE INDEX IF NOT EXISTS idx_messages_chat_id_iso ON messages(chat_id, iso_date);`),
@@ -1534,26 +1542,84 @@ export default {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
         const chatId = pathname.split('/')[3];
         const body: any = await request.json().catch(() => ({}));
-        const { isTyping } = body;
+        const isTyping = Boolean(body.isTyping);
 
         let chat: ServerChat | null = null;
-        if (env.DB) {
-          chat = await getD1ChatById(env.DB, chatId);
-        } else {
-          chat = chatsDb[chatId] || null;
-        }
+        if (env.DB) chat = await getD1ChatById(env.DB, chatId);
+        else chat = chatsDb[chatId] || null;
 
         if (chat && chat.memberIds.includes(decodedUser.id)) {
-          // CHAT ISOLATION: deliver only to members of this chat
-          broadcastEvent('typing:change', { 
-            chatId, 
-            userId: decodedUser.id, 
-            userName: decodedUser.name, 
-            isTyping: Boolean(isTyping) 
+          if (env.DB) {
+            try {
+              if (isTyping) {
+                await env.DB.prepare(
+                  `INSERT INTO typing_status (chat_id, user_id, user_name, expires_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(chat_id, user_id) DO UPDATE SET
+                     user_name = excluded.user_name,
+                     expires_at = excluded.expires_at`
+                ).bind(chatId, decodedUser.id, decodedUser.name, Date.now() + 5000).run();
+              } else {
+                await env.DB.prepare(
+                  'DELETE FROM typing_status WHERE chat_id = ? AND user_id = ?'
+                ).bind(chatId, decodedUser.id).run();
+              }
+            } catch (e) {
+              console.warn('[Typing] Failed to persist typing state:', e);
+            }
+          }
+
+          // SSE remains the instant path when both clients share a Worker instance.
+          broadcastEvent('typing:change', {
+            chatId,
+            userId: decodedUser.id,
+            userName: decodedUser.name,
+            isTyping
           }, chat.memberIds);
         }
 
         return jsonResponse({ success: true });
+      }
+
+      // Cross-Worker fallback for typing indicators.
+      if (pathname.match(/^\/api\/chats\/[^/]+\/typing$/) && request.method === 'GET') {
+        if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+        const chatId = pathname.split('/')[3];
+
+        let chat: ServerChat | null = null;
+        if (env.DB) chat = await getD1ChatById(env.DB, chatId);
+        else chat = chatsDb[chatId] || null;
+
+        if (!chat || !chat.memberIds.includes(decodedUser.id)) {
+          return jsonResponse({ error: 'Forbidden' }, 403);
+        }
+
+        if (!env.DB) return jsonResponse({ typing: null });
+
+        try {
+          const now = Date.now();
+          await env.DB.prepare(
+            'DELETE FROM typing_status WHERE chat_id = ? AND expires_at <= ?'
+          ).bind(chatId, now).run();
+
+          const row: any = await env.DB.prepare(
+            `SELECT user_id, user_name, expires_at
+             FROM typing_status
+             WHERE chat_id = ? AND user_id != ? AND expires_at > ?
+             ORDER BY expires_at DESC LIMIT 1`
+          ).bind(chatId, decodedUser.id, now).first();
+
+          return jsonResponse({
+            typing: row ? {
+              userId: row.user_id,
+              userName: row.user_name,
+              expiresAt: Number(row.expires_at)
+            } : null
+          });
+        } catch (e) {
+          console.warn('[Typing] Failed to read typing state:', e);
+          return jsonResponse({ typing: null });
+        }
       }
 
       // 16. Presence Status Update
