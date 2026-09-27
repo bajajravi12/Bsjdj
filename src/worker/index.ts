@@ -1863,7 +1863,7 @@ export default {
     // Serve Service Worker for PWA and Push Notifications
     if (pathname === '/sw.js') {
       const swCode = `// AARVI Production Messenger Service Worker for Push Notifications, PWA Standalone Launch & Offline Caching
-const CACHE_NAME = 'aarvi-messenger-v2';
+const CACHE_NAME = 'aarvi-messenger-v3';
 
 const PRECACHE_ASSETS = [
   '/',
