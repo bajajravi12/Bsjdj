@@ -108,7 +108,7 @@ jobs:
         working-directory: twa
         env:
           KEYSTORE_PASSWORD: aarvi-build-keystore
-          KEY_PASSWORD: aarvi-build-key
+          KEY_PASSWORD: aarvi-build-keystore
         run: |
           keytool -genkeypair -v             -keystore android-keystore             -alias aarvi             -keyalg RSA             -keysize 2048             -validity 10000             -storepass "$KEYSTORE_PASSWORD"             -keypass "$KEY_PASSWORD"             -dname "CN=AARVI, OU=AARVI, O=AARVI, L=Jaipur, ST=Rajasthan, C=IN"
 
