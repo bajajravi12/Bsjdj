@@ -1133,6 +1133,132 @@ export default {
         return jsonResponse({ success: true, message: 'Push subscription persisted' });
       }
 
+      // 5.3 Push Notification Diagnostic Status
+      if (pathname === '/api/push/status' && request.method === 'GET') {
+        if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+        const userId = decodedUser.id;
+        let d1SubscriptionCount = 0;
+        let d1QueryOk = !env.DB;
+
+        if (env.DB) {
+          try {
+            const row: any = await env.DB
+              .prepare('SELECT COUNT(*) AS count FROM push_subscriptions WHERE user_id = ?')
+              .bind(userId)
+              .first();
+            d1SubscriptionCount = Number(row?.count || 0);
+            d1QueryOk = true;
+          } catch (error) {
+            console.error('[Push Diagnostics] D1 status query failed:', error);
+          }
+        }
+
+        const memorySubscriptionCount = pushSubscriptionsDb[userId]?.length || 0;
+
+        return jsonResponse({
+          success: true,
+          serverTime: new Date().toISOString(),
+          d1QueryOk,
+          d1SubscriptionCount,
+          memorySubscriptionCount,
+          subscriptionCount: Math.max(d1SubscriptionCount, memorySubscriptionCount),
+          vapidConfigured: Boolean(
+            env.VAPID_PUBLIC_KEY &&
+            env.VAPID_PRIVATE_KEY &&
+            env.VAPID_SUBJECT
+          ),
+          vapidPublicKeyAvailable: Boolean(
+            env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY
+          ),
+        });
+      }
+
+      // 5.4 Push Notification Test Endpoint
+      // Sends a real Web Push to the currently authenticated user so
+      // background/closed-app delivery can be tested without another account.
+      if (pathname === '/api/push/test' && request.method === 'POST') {
+        if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+        const subscriptions = await getWorkerPushSubscriptionsForUser(env.DB, decodedUser.id);
+        if (subscriptions.length === 0) {
+          return jsonResponse({
+            success: false,
+            sent: 0,
+            failed: 0,
+            subscriptionCount: 0,
+            error: 'No push subscription is registered for this account',
+          }, 400);
+        }
+
+        const vapidPublic = env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY;
+        const vapidPrivate = env.VAPID_PRIVATE_KEY || DEFAULT_VAPID_PRIVATE_KEY;
+        const vapidSubject = env.VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT;
+        const payload = JSON.stringify({
+          title: 'AARVI Push Test',
+          body: 'Background push delivery test — AARVI is working.',
+          messageId: `push-test-${Date.now()}`,
+          tag: `aarvi-push-test-${Date.now()}`,
+          icon: '/icon.png',
+        });
+
+        let sent = 0;
+        let failed = 0;
+        const errors: string[] = [];
+
+        for (const sub of subscriptions) {
+          try {
+            await webPush.sendNotification(
+              {
+                endpoint: sub.endpoint,
+                keys: {
+                  p256dh: sub.p256dh,
+                  auth: sub.auth,
+                },
+              },
+              payload,
+              {
+                vapidDetails: {
+                  subject: vapidSubject,
+                  publicKey: vapidPublic,
+                  privateKey: vapidPrivate,
+                },
+              }
+            );
+            sent += 1;
+          } catch (err: any) {
+            failed += 1;
+            const statusCode = err?.statusCode;
+            const message = err?.message || String(err);
+            errors.push(statusCode ? `HTTP ${statusCode}: ${message}` : message);
+
+            if (statusCode === 404 || statusCode === 410) {
+              if (env.DB) {
+                await env.DB
+                  .prepare('DELETE FROM push_subscriptions WHERE endpoint = ?')
+                  .bind(sub.endpoint)
+                  .run()
+                  .catch(() => {});
+              }
+              if (pushSubscriptionsDb[decodedUser.id]) {
+                pushSubscriptionsDb[decodedUser.id] =
+                  pushSubscriptionsDb[decodedUser.id].filter(
+                    (saved) => saved.endpoint !== sub.endpoint
+                  );
+              }
+            }
+          }
+        }
+
+        return jsonResponse({
+          success: sent > 0,
+          sent,
+          failed,
+          subscriptionCount: subscriptions.length,
+          errors: errors.slice(0, 3),
+        }, sent > 0 ? 200 : 502);
+      }
+
       // 5.3 Push Notification Unsubscribe Endpoint
       if (pathname === '/api/push/unsubscribe' && request.method === 'POST') {
         if (!decodedUser) return jsonResponse({ error: 'Unauthorized' }, 401);
