@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-apk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -18,7 +18,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -33,7 +33,7 @@ jobs:
           accept-android-sdk-licenses: true
 
       - name: Install Bubblewrap
-        run: npm install -g @bubblewrap/cli@1.24.1
+        run: npm install -g @bubblewrap/cli@1.25.0
 
       - name: Configure Bubblewrap for CI
         run: |
@@ -73,8 +73,8 @@ jobs:
             "navigationColor": "#020617",
             "navigationColorDark": "#020617",
             "startUrl": "/",
-            "iconUrl": "http://127.0.0.1:8765/icon-512.png",
-            "maskableIconUrl": "http://127.0.0.1:8765/maskable-icon.png",
+            "iconUrl": "http://127.0.0.1:8765/icon-512.svg",
+            "maskableIconUrl": "http://127.0.0.1:8765/maskable-icon.svg",
             "enableNotifications": true,
             "appVersionCode": 1,
             "appVersionName": "1.0.0",
@@ -110,18 +110,31 @@ jobs:
 
       - name: Generate Android TWA project
         run: |
-          # Bubblewrap/Jimp is sensitive to remote image response headers/buffers.
-          # Download the known-good PNG bytes first, then serve them locally with
-          # Python's HTTP server so the response is explicitly image/png.
-          curl -fsSL "https://raw.githubusercontent.com/bajajravi12/Bsjdj/main/public/icon-512.png" -o ./twa/icon-512.png
-          curl -fsSL "https://raw.githubusercontent.com/bajajravi12/Bsjdj/main/public/maskable-icon.png" -o ./twa/maskable-icon.png
+          # Bubblewrap/Jimp can fail to decode some PNG buffers in CI.
+          # Use deterministic local SVG icons instead: Bubblewrap converts SVG
+          # to a fresh PNG with its bundled resvg renderer before Jimp processes it.
+          cat > ./twa/icon-512.svg <<'EOF'
+          <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+            <defs>
+              <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#38bdf8"/>
+                <stop offset="1" stop-color="#818cf8"/>
+              </linearGradient>
+            </defs>
+            <rect width="512" height="512" rx="112" fill="#020617"/>
+            <path d="M256 72 92 440h76l32-82h112l32 82h76L256 72Zm0 132 34 88h-68l34-88Z" fill="url(#g)"/>
+            <circle cx="256" cy="404" r="12" fill="#fff"/>
+          </svg>
+          EOF
+          cp ./twa/icon-512.svg ./twa/maskable-icon.svg
+
           python3 -m http.server 8765 --bind 127.0.0.1 --directory ./twa >/tmp/aarvi-icon-server.log 2>&1 &
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
           sleep 1
-          curl -fsSI "http://127.0.0.1:8765/icon-512.png"
-          curl -fsSI "http://127.0.0.1:8765/maskable-icon.png"
-          npx @bubblewrap/cli@1.24.1 update --manifest=./twa/twa-manifest.json --skipVersionUpgrade
+          curl -fsSI "http://127.0.0.1:8765/icon-512.svg"
+          curl -fsSI "http://127.0.0.1:8765/maskable-icon.svg"
+          npx @bubblewrap/cli@1.25.0 update --manifest=./twa/twa-manifest.json --skipVersionUpgrade
 
       - name: Build signed APK
         working-directory: twa
@@ -129,7 +142,7 @@ jobs:
           BUBBLEWRAP_KEYSTORE_PASSWORD: aarvi-build-keystore
           BUBBLEWRAP_KEY_PASSWORD: aarvi-build-key
         run: |
-          npx @bubblewrap/cli@1.24.1 build             --manifest=./twa-manifest.json             --signingKeyPath=./android-keystore             --signingKeyAlias=aarvi
+          npx @bubblewrap/cli@1.25.0 build             --manifest=./twa-manifest.json             --signingKeyPath=./android-keystore             --signingKeyAlias=aarvi
 
       - name: Upload AARVI APK
         uses: actions/upload-artifact@v4
