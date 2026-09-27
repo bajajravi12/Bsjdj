@@ -354,7 +354,7 @@ async function sendWorkerWebPushToRecipients(env: Env, chatId: string, senderId:
     chatId: message.chatId,
     messageId: message.id,
     icon: senderUser?.avatar || '/icon.png',
-    tag: `aarvi-chat-${message.chatId}`,
+    tag: `aarvi-msg-${message.id}`,
   });
 
   for (const rId of recipientIds) {
