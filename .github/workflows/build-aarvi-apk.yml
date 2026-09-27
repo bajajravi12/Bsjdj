@@ -134,7 +134,7 @@ jobs:
           sleep 1
           curl -fsSI "http://127.0.0.1:8765/icon-512.svg"
           curl -fsSI "http://127.0.0.1:8765/maskable-icon.svg"
-          npx @bubblewrap/cli@1.25.0 update --manifest=./twa/twa-manifest.json --skipVersionUpgrade
+          npx @bubblewrap/cli@1.25.0 update --directory=./twa --manifest=./twa/twa-manifest.json --skipVersionUpgrade
 
       - name: Build signed APK
         working-directory: twa
