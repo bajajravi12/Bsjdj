@@ -26,8 +26,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+          accept-android-sdk-licenses: true
+
       - name: Install Bubblewrap
         run: npm install -g @bubblewrap/cli
+
+      - name: Configure Bubblewrap for CI
+        run: |
+          bubblewrap updateConfig             --jdkPath="$JAVA_HOME"             --androidSdkPath="$ANDROID_HOME"
 
       - name: Prepare TWA manifest
         run: |
@@ -85,11 +95,11 @@ jobs:
           npx @bubblewrap/cli update             --manifest=./twa/twa-manifest.json             --skipVersionUpgrade
 
       - name: Build signed APK
+        working-directory: twa
         env:
           BUBBLEWRAP_KEYSTORE_PASSWORD: aarvi-build-keystore
           BUBBLEWRAP_KEY_PASSWORD: aarvi-build-key
         run: |
-          cd twa
           npx @bubblewrap/cli build             --manifest=./twa-manifest.json             --signingKeyPath=./android-keystore             --signingKeyAlias=aarvi
 
       - name: Upload AARVI APK
