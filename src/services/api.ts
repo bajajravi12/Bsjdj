@@ -543,6 +543,30 @@ export const apiSetTyping = async (
 };
 
 // ======================================================
+// TYPING STATE FALLBACK
+// ======================================================
+
+export const apiGetTyping = async (chatId: string) => {
+  const token = getAuthToken();
+  if (!token) return { typing: null };
+
+  try {
+    const res = await fetch(
+      API_BASE + '/chats/' + encodeURIComponent(chatId) + '/typing',
+      {
+        headers: { Authorization: 'Bearer ' + token },
+        cache: 'no-store',
+      }
+    );
+
+    if (!res.ok) return { typing: null };
+    return await parseResponseJson(res);
+  } catch {
+    return { typing: null };
+  }
+};
+
+// ======================================================
 // PRESENCE
 // ======================================================
 
