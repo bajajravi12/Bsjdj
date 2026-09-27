@@ -1,0 +1,97 @@
+name: Build AARVI Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "public/manifest.webmanifest"
+      - ".github/workflows/build-aarvi-apk.yml"
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Bubblewrap
+        run: npm install -g @bubblewrap/cli
+
+      - name: Initialize TWA project
+        env:
+          AARVI_HOST: gamerlife659.workers.dev
+        run: |
+          mkdir -p twa
+          cat > twa/twa-manifest.json <<'EOF'
+          {
+            "packageId": "com.aarvi.messenger",
+            "host": "gamerlife659.workers.dev",
+            "name": "AARVI",
+            "launcherName": "AARVI",
+            "display": "standalone",
+            "themeColor": "#0f172a",
+            "themeColorDark": "#020617",
+            "navigationColor": "#020617",
+            "navigationColorDark": "#020617",
+            "navigationDividerColor": "#020617",
+            "navigationDividerColorDark": "#020617",
+            "backgroundColor": "#020617",
+            "enableNotifications": true,
+            "startUrl": "/",
+            "iconUrl": "https://gamerlife659.workers.dev/icon-512.png",
+            "maskableIconUrl": "https://gamerlife659.workers.dev/maskable-icon.png",
+            "monochromeIconUrl": "",
+            "splashScreenFadeOutDuration": 300,
+            "signingKey": {
+              "path": "android.keystore",
+              "alias": "aarvi"
+            },
+            "appVersionCode": 1,
+            "appVersionName": "1.0.0",
+            "shortcuts": [],
+            "generatorApp": "bubblewrap",
+            "webManifestUrl": "https://gamerlife659.workers.dev/manifest.webmanifest",
+            "fallbackType": "customtabs",
+            "features": {},
+            "alphaDependencies": {
+              "enabled": false
+            },
+            "enableSiteSettingsShortcut": true,
+            "isChromeOSOnly": false,
+            "isMetaQuest": false,
+            "fullScopeUrl": "https://gamerlife659.workers.dev/",
+            "minSdkVersion": 23,
+            "additionalTrustedOrigins": [],
+            "retainedBundles": []
+          }
+          EOF
+
+      - name: Generate Android project
+        working-directory: twa
+        run: |
+          npx @bubblewrap/cli update --manifest=./twa-manifest.json --skipVersionUpgrade
+
+      - name: Build debug APK
+        working-directory: twa
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload AARVI APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AARVI-Android-APK
+          path: twa/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
