@@ -19,8 +19,11 @@ import {
   Type, 
   LogOut,
   Image as ImageIcon,
-  Sliders
+  Sliders,
+  RefreshCw,
+  Send
 } from 'lucide-react';
+import { apiGetPushStatus, apiTestPushNotification } from '../services/api';
 import { ApkDownloadButton, getApkDownloadUrl } from './ApkDownloadButton';
 
 interface SecuritySettingsModalProps {
@@ -49,6 +52,23 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
 
   const [currentSettings, setCurrentSettings] = useState<AppSettings>(settings);
   const [permissionState, setPermissionState] = useState(getNotificationPermissionStatus());
+  const [pushDiagnostics, setPushDiagnostics] = useState<{
+    loading: boolean;
+    testing: boolean;
+    browser: string;
+    serviceWorker: string;
+    subscription: string;
+    server: string;
+    detail: string;
+  }>({
+    loading: false,
+    testing: false,
+    browser: 'Not checked',
+    serviceWorker: 'Not checked',
+    subscription: 'Not checked',
+    server: 'Not checked',
+    detail: '',
+  });
 
   useEffect(() => {
     setCurrentSettings(settings);
@@ -65,6 +85,103 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
   const handleEnablePush = async () => {
     const res = await requestNotificationPermission();
     setPermissionState(res);
+  };
+
+  const runPushDiagnostics = async () => {
+    setPushDiagnostics((prev) => ({
+      ...prev,
+      loading: true,
+      detail: '',
+    }));
+
+    let browser = '🔴 Unsupported';
+    let serviceWorker = '🔴 Not available';
+    let subscription = '🔴 Not subscribed';
+    let server = '🔴 Not checked';
+    const details: string[] = [];
+
+    try {
+      const permission = getNotificationPermissionStatus();
+      browser =
+        permission === 'granted'
+          ? '🟢 Permission granted'
+          : permission === 'denied'
+          ? '🔴 Permission blocked'
+          : permission === 'default'
+          ? '🟡 Permission needed'
+          : '🔴 Notifications unsupported';
+
+      if ('serviceWorker' in navigator) {
+        const registration =
+          (await navigator.serviceWorker.getRegistration('/')) ||
+          (await navigator.serviceWorker.ready);
+        serviceWorker = registration
+          ? '🟢 Service Worker registered'
+          : '🔴 Service Worker missing';
+
+        if (registration && 'pushManager' in registration) {
+          const pushSub = await registration.pushManager.getSubscription();
+          subscription = pushSub
+            ? '🟢 Push subscription exists'
+            : '🔴 No Push subscription';
+        }
+      }
+
+      const status = await apiGetPushStatus();
+      server =
+        status.subscriptionCount > 0
+          ? `🟢 Server has ${status.subscriptionCount} subscription(s)`
+          : '🔴 Server has no subscription';
+
+      details.push(
+        `D1: ${status.d1SubscriptionCount}`,
+        `Memory: ${status.memorySubscriptionCount}`,
+        `VAPID: ${status.vapidConfigured ? 'configured' : 'fallback key'}`
+      );
+    } catch (error: any) {
+      details.push(error?.message || 'Diagnostic request failed');
+    }
+
+    setPushDiagnostics({
+      loading: false,
+      testing: false,
+      browser,
+      serviceWorker,
+      subscription,
+      server,
+      detail: details.join(' • '),
+    });
+  };
+
+  const runPushTest = async () => {
+    setPushDiagnostics((prev) => ({
+      ...prev,
+      testing: true,
+      detail: 'Sending a real Web Push to this device...',
+    }));
+
+    try {
+      // Refresh the subscription first so a login/account switch cannot
+      // leave the server pointing at an old subscription.
+      await requestNotificationPermission();
+      const result = await apiTestPushNotification();
+
+      setPushDiagnostics((prev) => ({
+        ...prev,
+        testing: false,
+        server: `🟢 Push sent: ${result.sent}/${result.subscriptionCount}`,
+        detail:
+          result.failed > 0
+            ? `Failed: ${result.failed} • ${result.errors?.join(' • ') || 'See Worker logs'}`
+            : 'Push provider accepted the notification.',
+      }));
+    } catch (error: any) {
+      setPushDiagnostics((prev) => ({
+        ...prev,
+        testing: false,
+        detail: `🔴 ${error?.message || 'Push test failed'}`,
+      }));
+    }
   };
 
   const updateSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
@@ -181,6 +298,48 @@ export const SecuritySettingsModal: React.FC<SecuritySettingsModalProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Push Diagnostics */}
+            {permissionState === 'granted' && (
+              <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h5 className="text-xs font-semibold text-white">Push Diagnostics</h5>
+                    <p className="text-[10px] text-slate-500">Check background notification delivery</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={runPushDiagnostics}
+                    disabled={pushDiagnostics.loading}
+                    className="p-1.5 text-slate-400 hover:text-white disabled:opacity-50"
+                    title="Run diagnostics"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${pushDiagnostics.loading ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 gap-1 text-[10px] font-mono">
+                  <div className="text-slate-400">Browser: <span className="text-slate-200">{pushDiagnostics.browser}</span></div>
+                  <div className="text-slate-400">Service Worker: <span className="text-slate-200">{pushDiagnostics.serviceWorker}</span></div>
+                  <div className="text-slate-400">Subscription: <span className="text-slate-200">{pushDiagnostics.subscription}</span></div>
+                  <div className="text-slate-400">Server: <span className="text-slate-200">{pushDiagnostics.server}</span></div>
+                </div>
+
+                {pushDiagnostics.detail && (
+                  <p className="text-[10px] text-slate-500 break-words">{pushDiagnostics.detail}</p>
+                )}
+
+                <button
+                  type="button"
+                  onClick={runPushTest}
+                  disabled={pushDiagnostics.testing}
+                  className="w-full py-2 px-3 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 rounded-xl text-[11px] font-bold flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  {pushDiagnostics.testing ? 'Sending Test Push…' : 'Send Test Push'}
+                </button>
+              </div>
+            )}
 
             {/* PWA App Install Button */}
             {Boolean(getApkDownloadUrl()) && (
