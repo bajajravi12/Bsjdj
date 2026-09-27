@@ -37,7 +37,10 @@ jobs:
 
       - name: Configure Bubblewrap for CI
         run: |
-          bubblewrap updateConfig             --jdkPath="$JAVA_HOME"             --androidSdkPath="$ANDROID_HOME"
+          mkdir -p "$HOME/.bubblewrap"
+          printf '%s\n' '{' '  "jdkPath": "'"$JAVA_HOME"'",' '  "androidSdkPath": "'"$ANDROID_HOME"'"' '}' > "$HOME/.bubblewrap/config.json"
+          cat "$HOME/.bubblewrap/config.json"
+          bubblewrap doctor
 
       - name: Prepare TWA manifest
         run: |
