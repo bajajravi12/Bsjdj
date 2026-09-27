@@ -1360,9 +1360,13 @@ export default {
         }
 
         // Trigger real Web Push notification to offline/background subscribers
-        sendWorkerWebPushToRecipients(env, chatId, currentUserId, newMsg).catch((err) => {
-          console.error('[Worker Push] Error sending web push:', err);
-        });
+        // Keep Web Push alive after the HTTP response is returned.
+        // Cloudflare Workers can cancel floating promises at invocation end.
+        ctx.waitUntil(
+          sendWorkerWebPushToRecipients(env, chatId, currentUserId, newMsg).catch((err) => {
+            console.error('[Worker Push] Error sending web push:', err);
+          })
+        );
 
         return jsonResponse({ success: true, message: newMsg, ackTimestamp: new Date().toISOString() }, 201);
       }
