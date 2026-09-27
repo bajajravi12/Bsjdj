@@ -29,9 +29,7 @@ jobs:
       - name: Install Bubblewrap
         run: npm install -g @bubblewrap/cli
 
-      - name: Initialize TWA project
-        env:
-          AARVI_HOST: gamerlife659.workers.dev
+      - name: Prepare TWA manifest
         run: |
           mkdir -p twa
           cat > twa/twa-manifest.json <<'EOF'
@@ -41,57 +39,62 @@ jobs:
             "name": "AARVI",
             "launcherName": "AARVI",
             "display": "standalone",
+            "orientation": "portrait-primary",
             "themeColor": "#0f172a",
-            "themeColorDark": "#020617",
+            "backgroundColor": "#020617",
             "navigationColor": "#020617",
             "navigationColorDark": "#020617",
-            "navigationDividerColor": "#020617",
-            "navigationDividerColorDark": "#020617",
-            "backgroundColor": "#020617",
-            "enableNotifications": true,
             "startUrl": "/",
             "iconUrl": "https://gamerlife659.workers.dev/icon-512.png",
             "maskableIconUrl": "https://gamerlife659.workers.dev/maskable-icon.png",
-            "monochromeIconUrl": "",
-            "splashScreenFadeOutDuration": 300,
-            "signingKey": {
-              "path": "android.keystore",
-              "alias": "aarvi"
-            },
+            "enableNotifications": true,
             "appVersionCode": 1,
             "appVersionName": "1.0.0",
+            "minSdkVersion": 23,
+            "signingKey": {
+              "path": "android-keystore",
+              "alias": "aarvi"
+            },
             "shortcuts": [],
             "generatorApp": "bubblewrap",
             "webManifestUrl": "https://gamerlife659.workers.dev/manifest.webmanifest",
-            "fallbackType": "customtabs",
-            "features": {},
+            "fullScopeUrl": "https://gamerlife659.workers.dev/",
+            "additionalTrustedOrigins": [],
+            "retainedBundles": [],
             "alphaDependencies": {
               "enabled": false
             },
-            "enableSiteSettingsShortcut": true,
             "isChromeOSOnly": false,
             "isMetaQuest": false,
-            "fullScopeUrl": "https://gamerlife659.workers.dev/",
-            "minSdkVersion": 23,
-            "additionalTrustedOrigins": [],
-            "retainedBundles": []
+            "splashScreenFadeOutDuration": 300,
+            "fallbackType": "customtabs",
+            "features": {}
           }
           EOF
 
-      - name: Generate Android project
+      - name: Generate signing key
         working-directory: twa
+        env:
+          KEYSTORE_PASSWORD: aarvi-build-keystore
+          KEY_PASSWORD: aarvi-build-key
         run: |
-          npx @bubblewrap/cli update --manifest=./twa-manifest.json --skipVersionUpgrade
+          keytool -genkeypair -v             -keystore android-keystore             -alias aarvi             -keyalg RSA             -keysize 2048             -validity 10000             -storepass "$KEYSTORE_PASSWORD"             -keypass "$KEY_PASSWORD"             -dname "CN=AARVI, OU=AARVI, O=AARVI, L=Jaipur, ST=Rajasthan, C=IN"
 
-      - name: Build debug APK
-        working-directory: twa
+      - name: Generate Android TWA project
         run: |
-          chmod +x ./gradlew
-          ./gradlew assembleDebug
+          npx @bubblewrap/cli update             --manifest=./twa/twa-manifest.json             --skipVersionUpgrade
+
+      - name: Build signed APK
+        env:
+          BUBBLEWRAP_KEYSTORE_PASSWORD: aarvi-build-keystore
+          BUBBLEWRAP_KEY_PASSWORD: aarvi-build-key
+        run: |
+          cd twa
+          npx @bubblewrap/cli build             --manifest=./twa-manifest.json             --signingKeyPath=./android-keystore             --signingKeyAlias=aarvi
 
       - name: Upload AARVI APK
         uses: actions/upload-artifact@v4
         with:
           name: AARVI-Android-APK
-          path: twa/app/build/outputs/apk/debug/app-debug.apk
+          path: twa/app-release-signed.apk
           if-no-files-found: error
