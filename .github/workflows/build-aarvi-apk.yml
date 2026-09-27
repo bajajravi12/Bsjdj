@@ -142,7 +142,10 @@ jobs:
           BUBBLEWRAP_KEYSTORE_PASSWORD: aarvi-build-keystore
           BUBBLEWRAP_KEY_PASSWORD: aarvi-build-key
         run: |
-          npx @bubblewrap/cli@1.25.0 build             --manifest=./twa-manifest.json             --signingKeyPath=./android-keystore             --signingKeyAlias=aarvi
+          # CI must answer Bubblewrap's checksum prompt explicitly.
+          # The generated project is already based on the manifest we just updated,
+          # so do not regenerate it interactively during the build.
+          printf 'n\n' | npx @bubblewrap/cli@1.25.0 build             --manifest=./twa-manifest.json             --signingKeyPath=./android-keystore             --signingKeyAlias=aarvi
 
       - name: Upload AARVI APK
         uses: actions/upload-artifact@v4
