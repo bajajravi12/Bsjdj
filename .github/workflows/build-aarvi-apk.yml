@@ -33,7 +33,7 @@ jobs:
           accept-android-sdk-licenses: true
 
       - name: Install Bubblewrap
-        run: npm install -g @bubblewrap/cli
+        run: npm install -g @bubblewrap/cli@1.24.1
 
       - name: Configure Bubblewrap for CI
         run: |
@@ -110,7 +110,7 @@ jobs:
 
       - name: Generate Android TWA project
         run: |
-          npx @bubblewrap/cli update             --manifest=./twa/twa-manifest.json             --skipVersionUpgrade
+          npx @bubblewrap/cli@1.24.1 update             --manifest=./twa/twa-manifest.json             --skipVersionUpgrade
 
       - name: Build signed APK
         working-directory: twa
@@ -118,7 +118,7 @@ jobs:
           BUBBLEWRAP_KEYSTORE_PASSWORD: aarvi-build-keystore
           BUBBLEWRAP_KEY_PASSWORD: aarvi-build-key
         run: |
-          npx @bubblewrap/cli build             --manifest=./twa-manifest.json             --signingKeyPath=./android-keystore             --signingKeyAlias=aarvi
+          npx @bubblewrap/cli@1.24.1 build             --manifest=./twa-manifest.json             --signingKeyPath=./android-keystore             --signingKeyAlias=aarvi
 
       - name: Upload AARVI APK
         uses: actions/upload-artifact@v4
