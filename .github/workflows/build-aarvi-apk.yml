@@ -63,7 +63,7 @@ jobs:
           cat > twa/twa-manifest.json <<'EOF'
           {
             "packageId": "com.aarvi.messenger",
-            "host": "gamerlife659.workers.dev",
+            "host": "rv.gamerlife659.workers.dev",
             "name": "AARVI",
             "launcherName": "AARVI",
             "display": "standalone",
@@ -73,8 +73,8 @@ jobs:
             "navigationColor": "#020617",
             "navigationColorDark": "#020617",
             "startUrl": "/",
-            "iconUrl": "https://gamerlife659.workers.dev/icon-512.png",
-            "maskableIconUrl": "https://gamerlife659.workers.dev/maskable-icon.png",
+            "iconUrl": "https://rv.gamerlife659.workers.dev/icon-512.png",
+            "maskableIconUrl": "https://rv.gamerlife659.workers.dev/maskable-icon.png",
             "enableNotifications": true,
             "appVersionCode": 1,
             "appVersionName": "1.0.0",
@@ -85,8 +85,8 @@ jobs:
             },
             "shortcuts": [],
             "generatorApp": "bubblewrap",
-            "webManifestUrl": "https://gamerlife659.workers.dev/manifest.webmanifest",
-            "fullScopeUrl": "https://gamerlife659.workers.dev/",
+            "webManifestUrl": "https://rv.gamerlife659.workers.dev/manifest.webmanifest",
+            "fullScopeUrl": "https://rv.gamerlife659.workers.dev/",
             "additionalTrustedOrigins": [],
             "retainedBundles": [],
             "alphaDependencies": {
