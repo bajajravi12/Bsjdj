@@ -50,6 +50,10 @@ jobs:
           done
           mkdir -p "$HOME/.bubblewrap"
           printf '%s\n' '{' '  "jdkPath": "'"$JAVA_HOME"'",' '  "androidSdkPath": "'"$BW_SDK"'"' '}' > "$HOME/.bubblewrap/config.json"
+          # Keep both Android SDK environment variables on the exact same path.
+          # AGP 8.9 rejects conflicting ANDROID_HOME and ANDROID_SDK_ROOT values.
+          echo "ANDROID_HOME=$BW_SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$BW_SDK" >> "$GITHUB_ENV"
           echo "Bubblewrap config:"
           cat "$HOME/.bubblewrap/config.json"
           echo "SDK layout:"
