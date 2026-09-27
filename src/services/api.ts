@@ -509,6 +509,57 @@ export const apiMarkRead = async (
 };
 
 // ======================================================
+// PUSH NOTIFICATION DIAGNOSTICS
+// ======================================================
+
+export const apiGetPushStatus = async () => {
+  const token = getAuthToken();
+  if (!token) throw new Error('Not authenticated');
+
+  const res = await fetch(`${API_BASE}/push/status`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      cache: 'no-store',
+    },
+    cache: 'no-store',
+  });
+
+  const data = await parseResponseJson(res);
+
+  if (!res.ok) {
+    throw new Error(data.error || `Push status failed (${res.status})`);
+  }
+
+  return data;
+};
+
+export const apiTestPushNotification = async () => {
+  const token = getAuthToken();
+  if (!token) throw new Error('Not authenticated');
+
+  const res = await fetch(`${API_BASE}/push/test`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    cache: 'no-store',
+  });
+
+  const data = await parseResponseJson(res);
+
+  if (!res.ok) {
+    throw new Error(
+      data.error ||
+      (Array.isArray(data.errors) && data.errors[0]) ||
+      `Push test failed (${res.status})`
+    );
+  }
+
+  return data;
+};
+
+// ======================================================
 // TYPING STATUS
 // ======================================================
 
