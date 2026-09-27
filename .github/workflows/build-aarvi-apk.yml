@@ -144,7 +144,7 @@ jobs:
         working-directory: twa
         env:
           BUBBLEWRAP_KEYSTORE_PASSWORD: aarvi-build-keystore
-          BUBBLEWRAP_KEY_PASSWORD: aarvi-build-key
+          BUBBLEWRAP_KEY_PASSWORD: aarvi-build-keystore
         run: |
           # CI must answer Bubblewrap's checksum prompt explicitly.
           # The generated project is already based on the manifest we just updated,
