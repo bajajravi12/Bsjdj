@@ -487,6 +487,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 key={msg.id}
                 className={`flex flex-col group ${isSelf ? 'items-end' : 'items-start'}`}
                 onContextMenu={(e) => openContextMenu(e, msg)}
+                onDoubleClick={(e) => openContextMenu(e, msg)}
                 onTouchStart={(e) => handleTouchStart(e, msg)}
                 onTouchEnd={handleTouchEnd}
                 onTouchMove={handleTouchEnd}
