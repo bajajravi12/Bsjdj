@@ -1434,11 +1434,41 @@ export default {
 
         if (clientMsgId && env.DB) {
           try {
+            // Idempotency: if the same client request is retried after the
+            // original request already committed, return the COMPLETE
+            // persisted message. Returning only {id,text} here caused the
+            // frontend's optimistic message and the server-confirmed
+            // message to be rendered as two separate messages because the
+            // confirmation was missing clientMsgId.
             const existingRow: any = await env.DB.prepare(
-              'SELECT * FROM messages WHERE client_msg_id = ?'
-            ).bind(clientMsgId).first();
+              'SELECT * FROM messages WHERE client_msg_id = ? AND sender_id = ? LIMIT 1'
+            ).bind(clientMsgId, currentUserId).first();
+
             if (existingRow) {
-              return jsonResponse({ success: true, duplicate: true, message: { id: existingRow.id, text: existingRow.text } });
+              const existingMessage: ServerMessage = {
+                id: existingRow.id,
+                clientMsgId: existingRow.client_msg_id,
+                chatId: existingRow.chat_id,
+                senderId: existingRow.sender_id,
+                senderName: existingRow.sender_name,
+                text: existingRow.text,
+                timestamp: existingRow.timestamp,
+                isoDate: existingRow.iso_date,
+                status: existingRow.status || 'sent',
+                mediaType: existingRow.media_type,
+                mediaUrl: existingRow.media_url,
+                replyToId: existingRow.reply_to_id,
+                replyToText: existingRow.reply_to_text,
+                reactions: parseReactionsJson(existingRow.reactions_json),
+                isEncrypted: Boolean(existingRow.is_encrypted),
+                isEdited: Boolean(existingRow.is_edited),
+              };
+
+              return jsonResponse({
+                success: true,
+                duplicate: true,
+                message: existingMessage,
+              }, 200);
             }
           } catch {}
         }
