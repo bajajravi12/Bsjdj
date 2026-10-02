@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { Chat, Message, User } from '../types';
 import { apiSetTyping, apiMarkRead } from '../services/api';
 import { getDisplayAvatar } from '../utils/avatar';
@@ -104,6 +104,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const typingTimerRef = useRef<any>(null);
   const isTypingActiveRef = useRef<boolean>(false);
   const longPressTimerRef = useRef<any>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -298,9 +299,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       clientY = e.touches[0].clientY;
     }
 
-    // Keep context menu within viewport bounds
-    const x = Math.min(clientX, window.innerWidth - 220);
-    const y = Math.min(clientY, window.innerHeight - 280);
+    // Start near the pointer. A layout pass below measures the real
+    // menu height/width and moves it fully inside the viewport.
+    const x = Math.max(8, Math.min(clientX, window.innerWidth - 232));
+    const y = Math.max(8, Math.min(clientY, window.innerHeight - 120));
 
     setContextMenu({
       visible: true,
@@ -309,6 +311,38 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       message: msg,
     });
   };
+
+  // Reposition the menu after it is rendered so the complete action list
+  // is always visible, including when opening it near the bottom/right edge
+  // of a phone or a laptop screen.
+  useLayoutEffect(() => {
+    if (!contextMenu.visible || !contextMenuRef.current) return;
+
+    const rect = contextMenuRef.current.getBoundingClientRect();
+    const margin = 8;
+    const nextX = Math.max(
+      margin,
+      Math.min(contextMenu.x, window.innerWidth - rect.width - margin)
+    );
+    const nextY = Math.max(
+      margin,
+      Math.min(contextMenu.y, window.innerHeight - rect.height - margin)
+    );
+
+    if (nextX !== contextMenu.x || nextY !== contextMenu.y) {
+      setContextMenu((prev) => ({
+        ...prev,
+        x: nextX,
+        y: nextY,
+      }));
+    }
+  }, [
+    contextMenu.visible,
+    contextMenu.x,
+    contextMenu.y,
+    contextMenu.message?.id,
+    contextMenu.message?.senderId,
+  ]);
 
   // Touch Long Press Handlers for Mobile
   const handleTouchStart = (e: React.TouchEvent, msg: Message) => {
@@ -799,7 +833,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       {/* CONTEXT MENU POPOVER (Desktop Right-Click & Mobile Long-Press) */}
       {contextMenu.visible && contextMenu.message && (
         <div
-          style={{ top: contextMenu.y, left: contextMenu.x }}
+          ref={contextMenuRef}
+          style={{
+            top: contextMenu.y,
+            left: contextMenu.x,
+            maxHeight: 'calc(100dvh - 16px)',
+            overflowY: 'auto',
+            overscrollBehavior: 'contain',
+          }}
           className="fixed z-50 bg-slate-900 border border-slate-800 rounded-2xl p-2 shadow-2xl w-56 space-y-1 text-xs text-slate-200 animate-in fade-in zoom-in-95 duration-100"
           onClick={(e) => e.stopPropagation()}
         >
