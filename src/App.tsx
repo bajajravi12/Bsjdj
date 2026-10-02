@@ -46,13 +46,18 @@ import {
  */
 function mergeServerAndLocalMessages(
   existingMsgs: Message[] = [],
-  incomingMsgs: Message[] = []
+  incomingMsgs: Message[] = [],
+  deletedMessageIds?: ReadonlySet<string>
 ): Message[] {
   const messagesById = new Map<string, Message>();
   const clientIdToMessageId = new Map<string, string>();
 
-  // Preserve existing local messages.
+  // Preserve existing local messages, except for local deletion tombstones.
   for (const message of existingMsgs) {
+    if (deletedMessageIds?.has(message.id)) {
+      continue;
+    }
+
     messagesById.set(message.id, message);
 
     if (message.clientMsgId) {
@@ -62,6 +67,12 @@ function mergeServerAndLocalMessages(
 
   // Merge incoming server messages.
   for (const incoming of incomingMsgs) {
+    // The server may still return a stale copy during incremental sync.
+    // A local tombstone must win so deleted messages cannot come back.
+    if (deletedMessageIds?.has(incoming.id)) {
+      continue;
+    }
+
     let existing = messagesById.get(incoming.id);
 
     // Match server message with optimistic/local message.
@@ -122,6 +133,11 @@ export default function App() {
 
   const [isAuthChecking, setIsAuthChecking] =
     useState<boolean>(true);
+
+  // Message deletion tombstones prevent D1/sync/local-cache snapshots from
+  // resurrecting messages after "Delete for me" or "Delete for everyone".
+  const deletedMessageIdsRef =
+    useRef<Set<string>>(new Set());
 
   const [chats, setChats] =
     useState<Chat[]>([]);
@@ -344,6 +360,28 @@ export default function App() {
     subscribePushManager(getAuthToken() || undefined).catch(() => {});
 
     const loadAccountData = async () => {
+      // Keep deletions scoped to the logged-in account.
+      const deletionStorageKey =
+        `aarvi_deleted_message_ids:${currentUser.id}`;
+
+      try {
+        const rawDeleted =
+          localStorage.getItem(deletionStorageKey);
+        const parsedDeleted =
+          rawDeleted ? JSON.parse(rawDeleted) : [];
+        deletedMessageIdsRef.current =
+          new Set(
+            Array.isArray(parsedDeleted)
+              ? parsedDeleted.filter(
+                  (id): id is string =>
+                    typeof id === 'string'
+                )
+              : []
+          );
+      } catch {
+        deletedMessageIdsRef.current = new Set();
+      }
+
       let fetchedChats: Chat[] = [];
 
       // A transient /api/chats failure must never make an existing account
@@ -419,7 +457,8 @@ export default function App() {
                     [chat.id]:
                       mergeServerAndLocalMessages(
                         prev[chat.id] || [],
-                        mRes.messages
+                        mRes.messages,
+                        deletedMessageIdsRef.current
                       )
                   })
                 );
@@ -462,7 +501,8 @@ export default function App() {
               [chatId]:
                 mergeServerAndLocalMessages(
                   prevMap[chatId] || [],
-                  [message]
+                  [message],
+                  deletedMessageIdsRef.current
                 )
             }));
 
@@ -713,6 +753,21 @@ export default function App() {
               chatId,
               messageId
             } = data;
+
+            if (messageId) {
+              deletedMessageIdsRef.current.add(messageId);
+
+              try {
+                localStorage.setItem(
+                  `aarvi_deleted_message_ids:${currentUser.id}`,
+                  JSON.stringify(
+                    Array.from(
+                      deletedMessageIdsRef.current
+                    )
+                  )
+                );
+              } catch {}
+            }
 
             setMessagesMap(
               (prevMap) => ({
@@ -1243,7 +1298,8 @@ export default function App() {
                     mergeServerAndLocalMessages(
                       prevMap[cId] ||
                         [],
-                      msgs as Message[]
+                      msgs as Message[],
+                      deletedMessageIdsRef.current
                     );
 
                   nextMap[cId] =
@@ -1562,7 +1618,8 @@ export default function App() {
                       prev[
                         chatId
                       ] || [],
-                      mRes.messages
+                      mRes.messages,
+                      deletedMessageIdsRef.current
                     )
                 })
               );
@@ -1698,7 +1755,8 @@ export default function App() {
               ] || [],
               [
                 optimisticMsg
-              ]
+              ],
+              deletedMessageIdsRef.current
             )
         })
       );
@@ -1747,7 +1805,8 @@ export default function App() {
                   ] || [],
                   [
                     confirmedMsg
-                  ]
+                  ],
+                  deletedMessageIdsRef.current
                 )
             })
           );
@@ -1833,22 +1892,34 @@ export default function App() {
       messageId: string,
       deleteForEveryone: boolean
     ) => {
-      if (
-        !activeChatId
-      ) return;
+      const targetChatId = activeChatId;
+      if (!targetChatId || !messageId || !currentUser) return;
 
+      const deletionStorageKey =
+        `aarvi_deleted_message_ids:${currentUser.id}`;
+
+      // Add a tombstone before the request so a concurrent sync cannot
+      // reinsert the message while deletion is in flight.
+      deletedMessageIdsRef.current.add(messageId);
+      try {
+        localStorage.setItem(
+          deletionStorageKey,
+          JSON.stringify(
+            Array.from(deletedMessageIdsRef.current)
+          )
+        );
+      } catch {}
+
+      // Optimistically remove it from the visible chat.
       setMessagesMap(
         (prev) => ({
           ...prev,
-          [activeChatId]:
+          [targetChatId]:
             (
-              prev[
-                activeChatId
-              ] || []
+              prev[targetChatId] || []
             ).filter(
               (m) =>
-                m.id !==
-                messageId
+                m.id !== messageId
             )
         })
       );
@@ -1858,13 +1929,37 @@ export default function App() {
           messageId,
           deleteForEveryone
         );
-      } catch (
-        err
-      ) {
+      } catch (err) {
+        // API failure: remove the tombstone and restore from the server.
+        deletedMessageIdsRef.current.delete(messageId);
+        try {
+          localStorage.setItem(
+            deletionStorageKey,
+            JSON.stringify(
+              Array.from(deletedMessageIdsRef.current)
+            )
+          );
+        } catch {}
+
         console.error(
           'Delete message failed:',
           err
         );
+
+        try {
+          const restored = await apiFetchMessages(targetChatId);
+          if (restored?.messages) {
+            setMessagesMap((prev) => ({
+              ...prev,
+              [targetChatId]:
+                mergeServerAndLocalMessages(
+                  prev[targetChatId] || [],
+                  restored.messages,
+                  deletedMessageIdsRef.current
+                )
+            }));
+          }
+        } catch {}
       }
     };
 
