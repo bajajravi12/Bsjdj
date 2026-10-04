@@ -561,6 +561,14 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
                 <div
                   key={msg.id}
                   className={`flex flex-col group ${isSelf ? 'items-end' : 'items-start'}`}
+                  // Large chats (like long-running Saina conversations) can contain
+                  // hundreds/thousands of message DOM nodes. Let the browser skip
+                  // layout/paint work for off-screen rows so the composer stays
+                  // responsive even when the history is large.
+                  style={{
+                    contentVisibility: 'auto',
+                    containIntrinsicSize: '0 76px',
+                  }}
                   onContextMenu={(e) => openContextMenu(e, msg)}
                   onClick={(e) => {
                     if (e.detail === 2 && e.button === 0) {
@@ -594,6 +602,8 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
                     {isImage && msg.mediaUrl && (
                       <div className="mb-2 overflow-hidden rounded-xl border border-black/20 cursor-pointer">
                         <img
+                          loading="lazy"
+                          decoding="async"
                           src={msg.mediaUrl}
                           alt="Attachment"
                           onClick={() => onOpenImagePreview(msg.mediaUrl!)}
