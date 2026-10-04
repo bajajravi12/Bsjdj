@@ -55,6 +55,65 @@ interface ChatWindowProps {
   onForwardMessage?: (targetChatId: string, message: Message) => void;
 }
 
+const FastMessageInput = React.memo(
+  React.forwardRef<HTMLInputElement, { chatId: string; placeholder: string }>(
+    ({ chatId, placeholder }, ref) => {
+      const typingActiveRef = useRef(false);
+      const typingStopTimerRef = useRef<any>(null);
+
+      const handleInput = (e: React.FormEvent<HTMLInputElement>) => {
+        const input = e.currentTarget;
+        const form = input.form;
+        if (form) {
+          form.dataset.hasText = input.value.trim() ? 'true' : 'false';
+        }
+      };
+
+      const handleFocus = () => {
+        if (typingActiveRef.current) return;
+        typingActiveRef.current = true;
+        apiSetTyping(chatId, true).catch(() => {});
+      };
+
+      const handleBlur = () => {
+        if (typingStopTimerRef.current) {
+          clearTimeout(typingStopTimerRef.current);
+        }
+        typingStopTimerRef.current = setTimeout(() => {
+          typingActiveRef.current = false;
+          apiSetTyping(chatId, false).catch(() => {});
+        }, 400);
+      };
+
+      useEffect(() => {
+        return () => {
+          if (typingStopTimerRef.current) {
+            clearTimeout(typingStopTimerRef.current);
+          }
+        };
+      }, []);
+
+      return (
+        <input
+          ref={ref}
+          type="text"
+          defaultValue=""
+          onInput={handleInput}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+          placeholder={placeholder}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="sentences"
+          spellCheck={false}
+          className="flex-1 min-w-0 w-0 bg-slate-950 border border-slate-800 text-slate-100 text-xs sm:text-sm rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+        />
+      );
+    }
+  ),
+  (prev, next) => prev.chatId === next.chatId && prev.placeholder === next.placeholder
+);
+
 const ChatWindowComponent: React.FC<ChatWindowProps> = ({
   chat,
   messages,
@@ -101,8 +160,6 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const recordingTimerRef = useRef<any>(null);
-  const typingTimerRef = useRef<any>(null);
-  const isTypingActiveRef = useRef<boolean>(false);
   const longPressTimerRef = useRef<any>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
@@ -160,26 +217,6 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
 
   // IMPORTANT: never perform network/state work on every keystroke.
   // The composer must stay on the browser's native input path.
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (composerFormRef.current) {
-      composerFormRef.current.dataset.hasText = e.target.value.trim() ? 'true' : 'false';
-    }
-  };
-
-  const handleComposerFocus = () => {
-    if (isTypingActiveRef.current) return;
-    isTypingActiveRef.current = true;
-    apiSetTyping(chat.id, true).catch(() => {});
-  };
-
-  const handleComposerBlur = () => {
-    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-    typingTimerRef.current = setTimeout(() => {
-      isTypingActiveRef.current = false;
-      apiSetTyping(chat.id, false).catch(() => {});
-    }, 400);
-  };
-
   // Close context menu on outside click
   useEffect(() => {
     const handleClickOutside = () => {
@@ -212,8 +249,6 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
     const text = input?.value.trim() || '';
     if (!text) return;
 
-    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-    apiSetTyping(chat.id, false).catch(() => {});
 
     // If Editing
     if (editingMessage) {
@@ -803,15 +838,10 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
               </button>
             </div>
           ) : (
-            <input
+            <FastMessageInput
               ref={inputRef}
-              type="text"
-              defaultValue=""
-              onChange={handleInputChange}
-              onFocus={handleComposerFocus}
-              onBlur={handleComposerBlur}
+              chatId={chat.id}
               placeholder={editingMessage ? 'Update message...' : 'Write an encrypted message...'}
-              className="flex-1 min-w-0 w-0 bg-slate-950 border border-slate-800 text-slate-100 text-xs sm:text-sm rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
           )}
 
