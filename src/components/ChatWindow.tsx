@@ -70,7 +70,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   allChats = [],
   onForwardMessage,
 }) => {
-  // Keep the composer DOM-uncontrolled so React never rewrites the input value on every keystroke.\n  const inputRef = useRef<HTMLInputElement>(null);\n  const [hasInputText, setHasInputText] = useState(false);
+  // Keep the composer DOM-uncontrolled so React never rewrites the input value on every keystroke.\n  const inputRef = useRef<HTMLInputElement>(null);\n  const composerFormRef = useRef<HTMLFormElement>(null);
   const [replyToMessage, setReplyToMessage] = useState<{ id: string; text: string } | null>(null);
   const [editingMessage, setEditingMessage] = useState<{ id: string; text: string } | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -161,7 +161,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   // Handle Input Typing with Debounce
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    setHasInputText(Boolean(val.trim()));
+    if (composerFormRef.current) composerFormRef.current.dataset.hasText = val.trim() ? 'true' : 'false';
 
     if (val.trim()) {
       if (!isTypingActiveRef.current) {
@@ -223,7 +223,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       }
       setEditingMessage(null);
       if (input) input.value = '';
-      setHasInputText(false);
+      if (composerFormRef.current) composerFormRef.current.dataset.hasText = 'false';
       return;
     }
 
@@ -236,7 +236,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     );
 
     if (input) input.value = '';
-    setHasInputText(false);
+    if (composerFormRef.current) composerFormRef.current.dataset.hasText = 'false';
     setReplyToMessage(null);
     setShowEmojiPicker(false);
     setShowAttachMenu(false);
@@ -245,7 +245,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const handleStartEdit = (msg: Message) => {
     setEditingMessage({ id: msg.id, text: msg.text });
     if (inputRef.current) inputRef.current.value = msg.text;
-    setHasInputText(Boolean(msg.text.trim()));
+    if (composerFormRef.current) composerFormRef.current.dataset.hasText = msg.text.trim() ? 'true' : 'false';
     setReplyToMessage(null);
   };
 
@@ -717,7 +717,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             onClick={() => {
               setEditingMessage(null);
               if (inputRef.current) inputRef.current.value = '';
-              setHasInputText(false);
+              if (composerFormRef.current) composerFormRef.current.dataset.hasText = 'false';
             }}
             className="p-1 text-amber-300 hover:text-white"
           >
@@ -757,7 +757,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                   if (input) {
                     input.value += e;
                     input.focus();
-                    setHasInputText(Boolean(input.value.trim()));
+                    if (composerFormRef.current) composerFormRef.current.dataset.hasText = input.value.trim() ? 'true' : 'false';
                   }
                   setShowEmojiPicker(false);
                 }}
@@ -769,7 +769,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           </div>
         )}
 
-        <form onSubmit={handleSend} className="flex items-center space-x-2 min-w-0">
+        <form ref={composerFormRef} data-has-text="false" onSubmit={handleSend} className="flex items-center space-x-2 min-w-0">
           <button
             type="button"
             onClick={() => setShowAttachMenu(!showAttachMenu)}
@@ -813,31 +813,26 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             />
           )}
 
-          {hasInputText ? (
-            <button
-              type="submit"
-              className="p-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-2xl shadow-lg transition-all active:scale-95"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                if (isRecordingVoice) handleFinishVoiceRecord();
-                else setIsRecordingVoice(true);
-              }}
-              className={`p-3 rounded-2xl font-bold transition-all active:scale-95 ${
-                isRecordingVoice
-                  ? 'bg-rose-600 text-white'
-                  : 'bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700'
-              }`}
-              title="Record Voice Note"
-            >
-              <Mic className="w-4 h-4" />
-            </button>
-          )}
-        </form>
+          <button
+            type="submit"
+            className="hidden [[data-has-text=true]_&]:flex p-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-2xl shadow-lg transition-all active:scale-95"
+          >
+            <Send className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (isRecordingVoice) handleFinishVoiceRecord();
+              else setIsRecordingVoice(true);
+            }}
+            className={`flex p-3 rounded-2xl font-bold transition-all active:scale-95 [[data-has-text=true]_&]:hidden ${isRecordingVoice
+              ? 'bg-rose-600 text-white'
+              : 'bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700'
+            }`}
+            title="Record Voice Note"
+          >
+            <Mic className="w-4 h-4" />
+          </button>        </form>
       </div>
 
       {/* CONTEXT MENU POPOVER (Desktop Right-Click & Mobile Long-Press) */}
