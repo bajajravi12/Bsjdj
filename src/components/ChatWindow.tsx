@@ -158,26 +158,26 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
     };
   }, [chat.id, (messages || []).length]);
 
-  // Handle Input Typing with Debounce
+  // IMPORTANT: never perform network/state work on every keystroke.
+  // The composer must stay on the browser's native input path.
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    if (composerFormRef.current) composerFormRef.current.dataset.hasText = val.trim() ? 'true' : 'false';
+    if (composerFormRef.current) {
+      composerFormRef.current.dataset.hasText = e.target.value.trim() ? 'true' : 'false';
+    }
+  };
 
-    if (val.trim()) {
-      if (!isTypingActiveRef.current) {
-        isTypingActiveRef.current = true;
-        apiSetTyping(chat.id, true).catch(() => {});
-      }
-      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-      typingTimerRef.current = setTimeout(() => {
-        isTypingActiveRef.current = false;
-        apiSetTyping(chat.id, false).catch(() => {});
-      }, 2500);
-    } else {
-      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+  const handleComposerFocus = () => {
+    if (isTypingActiveRef.current) return;
+    isTypingActiveRef.current = true;
+    apiSetTyping(chat.id, true).catch(() => {});
+  };
+
+  const handleComposerBlur = () => {
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    typingTimerRef.current = setTimeout(() => {
       isTypingActiveRef.current = false;
       apiSetTyping(chat.id, false).catch(() => {});
-    }
+    }, 400);
   };
 
   // Close context menu on outside click
@@ -808,6 +808,8 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
               type="text"
               defaultValue=""
               onChange={handleInputChange}
+              onFocus={handleComposerFocus}
+              onBlur={handleComposerBlur}
               placeholder={editingMessage ? 'Update message...' : 'Write an encrypted message...'}
               className="flex-1 min-w-0 w-0 bg-slate-950 border border-slate-800 text-slate-100 text-xs sm:text-sm rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
