@@ -1377,45 +1377,63 @@ export default function App() {
         handleVisibilityChange
       );
 
-      window.removeEventListener(
-        'focus',
-        handleVisibilityChange
-      );
-    };
-
-  }, [
-    isLoggedIn,
-    currentUser?.id
-  ]);
-
-  /*
-   * Typing fallback for Cloudflare Worker instances.
-   * SSE is still the instant path; this short poll reads durable D1 state
-   * when sender and recipient land on different Worker instances.
-   */
   useEffect(() => {
     if (!isLoggedIn || !currentUser || !activeChatId) return;
 
     let stopped = false;
     const pollTyping = async () => {
+      // Do not run a typing-state React update while the message composer has
+      // keyboard focus. This avoids competing with the browser's input thread
+      // on long-history chats.
+      const activeElement = document.activeElement as HTMLElement | null;
+      if (
+        activeElement &&
+        (activeElement.tagName === 'INPUT' ||
+          activeElement.tagName === 'TEXTAREA' ||
+          activeElement.isContentEditable)
+      ) {
+        return;
+      }
+
       const result = await apiGetTyping(activeChatId);
       if (stopped) return;
 
       const typing = result?.typing;
-      setChats((prev) => (prev || []).map((chat) =>
-        chat.id === activeChatId
-          ? {
-              ...chat,
-              isTyping: Boolean(typing),
-              typingUserName: typing?.userName || undefined,
-            }
-          : chat
-      ));
+      const nextIsTyping = Boolean(typing);
+      const nextTypingUserName = typing?.userName || undefined;
+
+      setChats((prev) => {
+        const currentChat = (prev || []).find((chat) => chat.id === activeChatId);
+        if (
+          currentChat &&
+          Boolean(currentChat.isTyping) === nextIsTyping &&
+          currentChat.typingUserName === nextTypingUserName
+        ) {
+          // Critical: don't create a new chat object when nothing changed.
+          // That would force the entire long chat tree to render again.
+          return prev;
+        }
+
+        return (prev || []).map((chat) =>
+          chat.id === activeChatId
+            ? {
+                ...chat,
+                isTyping: nextIsTyping,
+                typingUserName: nextTypingUserName,
+              }
+            : chat
+        );
+      });
     };
 
     pollTyping();
     const timer = setInterval(pollTyping, 1500);
 
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [isLoggedIn, currentUser?.id, activeChatId]);
     return () => {
       stopped = true;
       clearInterval(timer);
