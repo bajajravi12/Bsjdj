@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import { Chat, Message, User } from '../types';
 import { apiSetTyping, apiMarkRead } from '../services/api';
 import { getDisplayAvatar } from '../utils/avatar';
@@ -499,178 +499,169 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           </span>
         </div>
 
-        {(messages || []).length === 0 ? (
-          <div className="p-8 text-center text-xs text-slate-500 space-y-2 max-w-sm mx-auto mt-12">
-            <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400 mx-auto">
-              <Lock className="w-6 h-6" />
+        {useMemo(() => (
+          (messages || []).length === 0 ? (
+            <div className="p-8 text-center text-xs text-slate-500 space-y-2 max-w-sm mx-auto mt-12">
+              <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400 mx-auto">
+                <Lock className="w-6 h-6" />
+              </div>
+              <p className="font-bold text-slate-300">No messages in this chat yet</p>
+              <p className="text-[11px] text-slate-500">
+                Messages are encrypted end-to-end and stored securely. Send a message below to start chatting!
+              </p>
             </div>
-            <p className="font-bold text-slate-300">No messages in this chat yet</p>
-            <p className="text-[11px] text-slate-500">
-              Messages are encrypted end-to-end and stored securely. Send a message below to start chatting!
-            </p>
-          </div>
-        ) : (
-          (messages || []).map((msg) => {
-            const isSelf = msg.senderId === currentUser.id;
-            const isVoice = msg.mediaType === 'voice';
-            const isImage = msg.mediaType === 'image';
-            const isLocation = msg.mediaType === 'location';
+          ) : (
+            (messages || []).map((msg) => {
+              const isSelf = msg.senderId === currentUser.id;
+              const isVoice = msg.mediaType === 'voice';
+              const isImage = msg.mediaType === 'image';
+              const isLocation = msg.mediaType === 'location';
 
-            return (
-              <div
-                key={msg.id}
-                className={`flex flex-col group ${isSelf ? 'items-end' : 'items-start'}`}
-                onContextMenu={(e) => openContextMenu(e, msg)}
-                onClick={(e) => {
-                  // Some laptop touchpads reliably expose a double-tap as two
-                  // primary click events but may not dispatch React's dblclick
-                  // event. Use the browser's click detail as a desktop fallback.
-                  if (e.detail === 2 && e.button === 0) {
-                    openContextMenu(e, msg);
-                  }
-                }}
-                onTouchStart={(e) => handleTouchStart(e, msg)}
-                onTouchEnd={handleTouchEnd}
-                onTouchMove={handleTouchEnd}
-              >
+              return (
                 <div
-                  className={`min-w-0 max-w-[88%] sm:max-w-[70%] rounded-2xl p-3.5 shadow-md relative transition-all break-words overflow-hidden ${
-                    isSelf
-                      ? 'bg-emerald-600 text-white rounded-br-none'
-                      : 'bg-slate-900 text-slate-100 border border-slate-800 rounded-bl-none'
-                  }`}
+                  key={msg.id}
+                  className={`flex flex-col group ${isSelf ? 'items-end' : 'items-start'}`}
+                  onContextMenu={(e) => openContextMenu(e, msg)}
+                  onClick={(e) => {
+                    if (e.detail === 2 && e.button === 0) {
+                      openContextMenu(e, msg);
+                    }
+                  }}
+                  onTouchStart={(e) => handleTouchStart(e, msg)}
+                  onTouchEnd={handleTouchEnd}
+                  onTouchMove={handleTouchEnd}
                 >
-                  {/* Sender Name */}
-                  {!isSelf && (
-                    <div className="text-[10px] font-bold text-emerald-400 mb-1 flex items-center justify-between">
-                      <span>{msg.senderName}</span>
-                    </div>
-                  )}
-
-                  {/* Reply Quote Banner */}
-                  {msg.replyToText && (
-                    <div className="mb-2 p-2 rounded-lg bg-black/20 border-l-2 border-emerald-300 text-[11px] opacity-90 truncate">
-                      <span className="font-semibold block text-[10px]">Replying to:</span>
-                      {msg.replyToText}
-                    </div>
-                  )}
-
-                  {/* Image Attachment */}
-                  {isImage && msg.mediaUrl && (
-                    <div className="mb-2 overflow-hidden rounded-xl border border-black/20 cursor-pointer">
-                      <img
-                        src={msg.mediaUrl}
-                        alt="Attachment"
-                        onClick={() => onOpenImagePreview(msg.mediaUrl!)}
-                        className="w-full max-h-60 object-cover hover:scale-105 transition-transform"
-                      />
-                    </div>
-                  )}
-
-                  {/* Voice Note Attachment */}
-                  {isVoice && (
-                    <div className="mb-2 p-2 rounded-xl bg-black/20 flex items-center space-x-3">
-                      <button
-                        onClick={() => toggleVoicePlayback(msg.id)}
-                        className="w-9 h-9 rounded-full bg-slate-950 flex items-center justify-center text-emerald-400 shadow"
-                      >
-                        {activePlayingVoiceId === msg.id ? (
-                          <Pause className="w-4 h-4" />
-                        ) : (
-                          <Play className="w-4 h-4 ml-0.5" />
-                        )}
-                      </button>
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between text-[10px] text-emerald-200 mb-1">
-                          <span>Voice Recording</span>
-                          <span>0:08</span>
-                        </div>
-                        <div className="h-1.5 bg-slate-950/60 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full bg-emerald-400 transition-all ${
-                              activePlayingVoiceId === msg.id ? 'w-full duration-8000' : 'w-1/3'
-                            }`}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Location Attachment */}
-                  {isLocation && (
-                    <div className="mb-2 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center space-x-2 text-xs text-emerald-300">
-                      <MapPin className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                      <span>{msg.text}</span>
-                    </div>
-                  )}
-
-                  {/* Text Body */}
-                  {!isLocation && (
-                    <p className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap break-words">
-                      {msg.text}
-                    </p>
-                  )}
-
-                  {/* Emoji Reactions Pill Bar */}
-                  {msg.reactions && msg.reactions.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {msg.reactions.map((r) => {
-                        const hasReacted = r.users.includes(currentUser.id);
-                        return (
-                          <button
-                            key={r.emoji}
-                            onClick={() => onReactMessage && onReactMessage(msg.id, r.emoji)}
-                            className={`px-2 py-0.5 rounded-full text-[11px] flex items-center space-x-1 border transition-all ${
-                              hasReacted
-                                ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 font-bold'
-                                : 'bg-black/20 border-black/30 text-slate-300'
-                            }`}
-                          >
-                            <span>{r.emoji}</span>
-                            <span>{r.count}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Message Footer */}
                   <div
-                    className={`flex items-center justify-end space-x-1.5 mt-1 text-[9px] font-medium ${
-                      isSelf ? 'text-emerald-100/80' : 'text-slate-400'
+                    className={`min-w-0 max-w-[88%] sm:max-w-[70%] rounded-2xl p-3.5 shadow-md relative transition-all break-words overflow-hidden ${
+                      isSelf
+                        ? 'bg-emerald-600 text-white rounded-br-none'
+                        : 'bg-slate-900 text-slate-100 border border-slate-800 rounded-bl-none'
                     }`}
                   >
-                    {msg.isEdited && <span className="italic opacity-80">(edited)</span>}
-                    <Lock className="w-2.5 h-2.5 opacity-70" />
-                    <span>{formatMessageTime(msg.isoDate, msg.timestamp)}</span>
-
-                    {isSelf && (
-                      <span className="font-bold ml-0.5">
-                        {msg.status === 'read' ? (
-                          <CheckCheck className="w-3.5 h-3.5 text-cyan-300 inline" title="Read" />
-                        ) : msg.status === 'delivered' ? (
-                          <CheckCheck className="w-3.5 h-3.5 text-emerald-100/90 inline" title="Delivered" />
-                        ) : msg.status === 'sent' ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-100/90 inline" title="Sent" />
-                        ) : (
-                          '🕒'
-                        )}
-                      </span>
+                    {!isSelf && (
+                      <div className="text-[10px] font-bold text-emerald-400 mb-1 flex items-center justify-between">
+                        <span>{msg.senderName}</span>
+                      </div>
                     )}
-                  </div>
 
-                  {/* Quick Action Button on Hover */}
-                  <button
-                    onClick={(e) => openContextMenu(e, msg)}
-                    className="absolute -right-8 top-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-white"
-                    title="Options"
-                  >
-                    <MoreVertical className="w-4 h-4" />
-                  </button>
+                    {msg.replyToText && (
+                      <div className="mb-2 p-2 rounded-lg bg-black/20 border-l-2 border-emerald-300 text-[11px] opacity-90 truncate">
+                        <span className="font-semibold block text-[10px]">Replying to:</span>
+                        {msg.replyToText}
+                      </div>
+                    )}
+
+                    {isImage && msg.mediaUrl && (
+                      <div className="mb-2 overflow-hidden rounded-xl border border-black/20 cursor-pointer">
+                        <img
+                          src={msg.mediaUrl}
+                          alt="Attachment"
+                          onClick={() => onOpenImagePreview(msg.mediaUrl!)}
+                          className="w-full max-h-60 object-cover hover:scale-105 transition-transform"
+                        />
+                      </div>
+                    )}
+
+                    {isVoice && (
+                      <div className="mb-2 p-2 rounded-xl bg-black/20 flex items-center space-x-3">
+                        <button
+                          onClick={() => toggleVoicePlayback(msg.id)}
+                          className="w-9 h-9 rounded-full bg-slate-950 flex items-center justify-center text-emerald-400 shadow"
+                        >
+                          {activePlayingVoiceId === msg.id ? (
+                            <Pause className="w-4 h-4" />
+                          ) : (
+                            <Play className="w-4 h-4 ml-0.5" />
+                          )}
+                        </button>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between text-[10px] text-emerald-200 mb-1">
+                            <span>Voice Recording</span>
+                            <span>0:08</span>
+                          </div>
+                          <div className="h-1.5 bg-slate-950/60 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full bg-emerald-400 transition-all ${
+                                activePlayingVoiceId === msg.id ? 'w-full duration-8000' : 'w-1/3'
+                              }`}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {isLocation && (
+                      <div className="mb-2 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center space-x-2 text-xs text-emerald-300">
+                        <MapPin className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                        <span>{msg.text}</span>
+                      </div>
+                    )}
+
+                    {!isLocation && (
+                      <p className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap break-words">
+                        {msg.text}
+                      </p>
+                    )}
+
+                    {msg.reactions && msg.reactions.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {msg.reactions.map((r) => {
+                          const hasReacted = r.users.includes(currentUser.id);
+                          return (
+                            <button
+                              key={r.emoji}
+                              onClick={() => onReactMessage && onReactMessage(msg.id, r.emoji)}
+                              className={`px-2 py-0.5 rounded-full text-[11px] flex items-center space-x-1 border transition-all ${
+                                hasReacted
+                                  ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 font-bold'
+                                  : 'bg-black/20 border-black/30 text-slate-300'
+                              }`}
+                            >
+                              <span>{r.emoji}</span>
+                              <span>{r.count}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div
+                      className={`flex items-center justify-end space-x-1.5 mt-1 text-[9px] font-medium ${
+                        isSelf ? 'text-emerald-100/80' : 'text-slate-400'
+                      }`}
+                    >
+                      {msg.isEdited && <span className="italic opacity-80">(edited)</span>}
+                      <Lock className="w-2.5 h-2.5 opacity-70" />
+                      <span>{formatMessageTime(msg.isoDate, msg.timestamp)}</span>
+
+                      {isSelf && (
+                        <span className="font-bold ml-0.5">
+                          {msg.status === 'read' ? (
+                            <CheckCheck className="w-3.5 h-3.5 text-cyan-300 inline" title="Read" />
+                          ) : msg.status === 'delivered' ? (
+                            <CheckCheck className="w-3.5 h-3.5 text-emerald-100/90 inline" title="Delivered" />
+                          ) : msg.status === 'sent' ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-100/90 inline" title="Sent" />
+                          ) : (
+                            '🕒'
+                          )}
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={(e) => openContextMenu(e, msg)}
+                      className="absolute -right-8 top-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-white"
+                      title="Options"
+                    >
+                      <MoreVertical className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            );
-          })
+              );
+            })
+          )
+        ), [messages, currentUser.id, activePlayingVoiceId])}
         )}
 
         {chat.isTyping && (
