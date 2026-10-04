@@ -70,7 +70,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   allChats = [],
   onForwardMessage,
 }) => {
-  const [inputText, setInputText] = useState('');
+  // Keep the composer DOM-uncontrolled so React never rewrites the input value on every keystroke.\n  const inputRef = useRef<HTMLInputElement>(null);\n  const [hasInputText, setHasInputText] = useState(false);
   const [replyToMessage, setReplyToMessage] = useState<{ id: string; text: string } | null>(null);
   const [editingMessage, setEditingMessage] = useState<{ id: string; text: string } | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -161,7 +161,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   // Handle Input Typing with Debounce
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    setInputText(val);
+    setHasInputText(Boolean(val.trim()));
 
     if (val.trim()) {
       if (!isTypingActiveRef.current) {
@@ -208,7 +208,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
   const handleSend = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputText.trim()) return;
+    const input = inputRef.current;
+    const text = input?.value.trim() || '';
+    if (!text) return;
 
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
     apiSetTyping(chat.id, false).catch(() => {});
@@ -216,23 +218,25 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     // If Editing
     if (editingMessage) {
       if (onEditMessage) {
-        onEditMessage(editingMessage.id, inputText.trim());
+        onEditMessage(editingMessage.id, text);
         showToast('Message edited');
       }
       setEditingMessage(null);
-      setInputText('');
+      if (input) input.value = '';
+      setHasInputText(false);
       return;
     }
 
     playSoundEffect('send');
     onSendMessage(
-      inputText.trim(),
+      text,
       undefined,
       undefined,
       replyToMessage || undefined
     );
 
-    setInputText('');
+    if (input) input.value = '';
+    setHasInputText(false);
     setReplyToMessage(null);
     setShowEmojiPicker(false);
     setShowAttachMenu(false);
@@ -240,7 +244,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
   const handleStartEdit = (msg: Message) => {
     setEditingMessage({ id: msg.id, text: msg.text });
-    setInputText(msg.text);
+    if (inputRef.current) inputRef.current.value = msg.text;
+    setHasInputText(Boolean(msg.text.trim()));
     setReplyToMessage(null);
   };
 
@@ -711,7 +716,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           <button
             onClick={() => {
               setEditingMessage(null);
-              setInputText('');
+              if (inputRef.current) inputRef.current.value = '';
+              setHasInputText(false);
             }}
             className="p-1 text-amber-300 hover:text-white"
           >
@@ -747,7 +753,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
               <button
                 key={e}
                 onClick={() => {
-                  setInputText((prev) => prev + e);
+                  const input = inputRef.current;
+                  if (input) {
+                    input.value += e;
+                    input.focus();
+                    setHasInputText(Boolean(input.value.trim()));
+                  }
                   setShowEmojiPicker(false);
                 }}
                 className="text-lg p-2 hover:bg-slate-800 rounded-xl transition-colors"
@@ -793,15 +804,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             </div>
           ) : (
             <input
+              ref={inputRef}
               type="text"
-              value={inputText}
+              defaultValue=""
               onChange={handleInputChange}
               placeholder={editingMessage ? 'Update message...' : 'Write an encrypted message...'}
               className="flex-1 min-w-0 w-0 bg-slate-950 border border-slate-800 text-slate-100 text-xs sm:text-sm rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
           )}
 
-          {inputText.trim() ? (
+          {hasInputText ? (
             <button
               type="submit"
               className="p-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-2xl shadow-lg transition-all active:scale-95"
