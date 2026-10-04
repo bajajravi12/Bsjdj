@@ -521,7 +521,14 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 key={msg.id}
                 className={`flex flex-col group ${isSelf ? 'items-end' : 'items-start'}`}
                 onContextMenu={(e) => openContextMenu(e, msg)}
-                onDoubleClick={(e) => openContextMenu(e, msg)}
+                onClick={(e) => {
+                  // Some laptop touchpads reliably expose a double-tap as two
+                  // primary click events but may not dispatch React's dblclick
+                  // event. Use the browser's click detail as a desktop fallback.
+                  if (e.detail === 2 && e.button === 0) {
+                    openContextMenu(e, msg);
+                  }
+                }}
                 onTouchStart={(e) => handleTouchStart(e, msg)}
                 onTouchEnd={handleTouchEnd}
                 onTouchMove={handleTouchEnd}
