@@ -55,7 +55,7 @@ interface ChatWindowProps {
   onForwardMessage?: (targetChatId: string, message: Message) => void;
 }
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({
+const ChatWindowComponent: React.FC<ChatWindowProps> = ({
   chat,
   messages,
   onSendMessage,
@@ -1000,3 +1000,19 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     </div>
   );
 };
+
+export const ChatWindow = React.memo(ChatWindowComponent, (prev, next) => (
+  prev.chat === next.chat &&
+  prev.messages === next.messages &&
+  prev.currentUser === next.currentUser &&
+  prev.allChats === next.allChats &&
+  prev.onSendMessage === next.onSendMessage &&
+  prev.onOpenImagePreview === next.onOpenImagePreview &&
+  prev.onSetSelfDestructTimer === next.onSetSelfDestructTimer &&
+  prev.onBackToChatList === next.onBackToChatList &&
+  prev.onEditMessage === next.onEditMessage &&
+  prev.onDeleteMessage === next.onDeleteMessage &&
+  prev.onReactMessage === next.onReactMessage &&
+  prev.onPinMessage === next.onPinMessage &&
+  prev.onForwardMessage === next.onForwardMessage
+));
