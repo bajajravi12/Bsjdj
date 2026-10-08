@@ -129,7 +129,9 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
   allChats = [],
   onForwardMessage,
 }) => {
-  // Keep the composer DOM-uncontrolled so React never rewrites the input value on every keystroke.\n  const inputRef = useRef<HTMLInputElement>(null);\n  const composerFormRef = useRef<HTMLFormElement>(null);
+  // Keep the composer DOM-uncontrolled so React never rewrites the input value on every keystroke.
+  const inputRef = useRef<HTMLInputElement>(null);
+  const composerFormRef = useRef<HTMLFormElement>(null);
   const [replyToMessage, setReplyToMessage] = useState<{ id: string; text: string } | null>(null);
   const [editingMessage, setEditingMessage] = useState<{ id: string; text: string } | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
