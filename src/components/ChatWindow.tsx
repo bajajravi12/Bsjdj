@@ -156,9 +156,12 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
   // Scroll & Auto-Scroll State
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [showNewMessageBanner, setShowNewMessageBanner] = useState(false);
-  // Keep the DOM small for long chats. The full history stays in memory; older
-  // messages are rendered only when the user explicitly asks for them.
-  const [visibleMessageCount, setVisibleMessageCount] = useState(50);
+  // Only the newest 50 messages are rendered in the chat UI. Full history
+  // remains available in the parent/cache, but old messages never enter the DOM.
+  const visibleMessages = useMemo(
+    () => (messages || []).slice(-50),
+    [messages]
+  );
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -232,17 +235,6 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
       document.removeEventListener('visibilitychange', markReadIfVisible);
     };
   }, [chat.id, (messages || []).length]);
-
-  // Reset the render window when switching conversations. This does not
-  // delete or truncate the actual message history.
-  useEffect(() => {
-    setVisibleMessageCount(50);
-  }, [chat.id]);
-
-  const visibleMessages = useMemo(() => {
-    const all = messages || [];
-    return all.slice(Math.max(0, all.length - visibleMessageCount));
-  }, [messages, visibleMessageCount]);
 
   // IMPORTANT: never perform network/state work on every keystroke.
   // The composer must stay on the browser's native input path.
@@ -739,17 +731,6 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
               );
             })
           )
-        )}
-        {visibleMessages.length < (messages || []).length && (
-          <div className="flex justify-center py-1">
-            <button
-              type="button"
-              onClick={() => setVisibleMessageCount((count) => Math.min(count + 50, (messages || []).length))}
-              className="px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-[10px] font-semibold text-slate-400 hover:text-emerald-300 hover:border-emerald-500/40 transition-colors"
-            >
-              Load older messages ({visibleMessages.length}/{messages.length})
-            </button>
-          </div>
         )}
 
         {chat.isTyping && (
