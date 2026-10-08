@@ -426,9 +426,16 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
   const emojis = ['👍', '❤️', '🔥', '😂', '😮', '🔒', '🚀', '💯'];
   const reactionEmojis = ['👍', '❤️', '🔥', '😂', '😮', '👏', '📌', '💯'];
 
-  const pinnedMsg = (messages || []).find((m) => m.id === chat.pinnedMessageId || m.isPinned);
+  const safeMessages = Array.isArray(messages) ? messages : [];
+  const safeMembers = Array.isArray(chat.members) ? chat.members : [];
+  const safeFingerprint =
+    typeof chat.encryptionFingerprint === 'string'
+      ? chat.encryptionFingerprint
+      : '';
 
-  const otherMember = (chat.members || []).find((m) => m.id !== currentUser.id && m.id !== 'usr-self');
+  const pinnedMsg = safeMessages.find((m) => m.id === chat.pinnedMessageId || m.isPinned);
+
+  const otherMember = safeMembers.find((m) => m.id !== currentUser.id && m.id !== 'usr-self');
   const presenceInfo = formatLastSeen(otherMember?.status, otherMember?.lastSeen);
   const displayAvatar = getDisplayAvatar(chat.name, chat.avatar, chat.id);
 
@@ -491,7 +498,7 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
               )}
               <span className="text-slate-600">&bull;</span>
               <span className="hidden sm:inline text-slate-500 font-mono text-[10px] truncate">
-                E2EE Key: {chat.encryptionFingerprint.slice(0, 10)}...
+                E2EE Key: {safeFingerprint ? safeFingerprint.slice(0, 10) + '...' : 'Unavailable'}
               </span>
             </div>
           </div>
@@ -673,10 +680,10 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
                       </p>
                     )}
 
-                    {msg.reactions && msg.reactions.length > 0 && (
+                    {Array.isArray(msg.reactions) && msg.reactions.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-2">
                         {msg.reactions.map((r) => {
-                          const hasReacted = r.users.includes(currentUser.id);
+                          const hasReacted = Array.isArray(r.users) && r.users.includes(currentUser.id);
                           return (
                             <button
                               key={r.emoji}
