@@ -1659,9 +1659,7 @@ export default {
               `SELECT id FROM messages
                WHERE chat_id = ?
                  AND sender_id != ?
-                 AND status != 'read'
-               ORDER BY iso_date DESC
-               LIMIT 50`
+                 AND status != 'read'`
             ).bind(chatId, currentUserId).all();
 
             readMessageIds = (unreadRows?.results || [])
@@ -1669,12 +1667,13 @@ export default {
               .filter(Boolean);
 
             if (readMessageIds.length > 0) {
-              const placeholders = readMessageIds.map(() => '?').join(', ');
               await env.DB.prepare(
                 `UPDATE messages
                  SET status = 'read', updated_at = ?
-                 WHERE id IN (${placeholders})`
-              ).bind(now, ...readMessageIds).run();
+                 WHERE chat_id = ?
+                   AND sender_id != ?
+                   AND status != 'read'`
+              ).bind(now, chatId, currentUserId).run();
             }
           } catch (e) {
             console.error('Failed to update message read status in D1:', e);
