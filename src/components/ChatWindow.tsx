@@ -159,7 +159,7 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
   // Only the newest 50 messages are rendered in the chat UI. Full history
   // remains available in the parent/cache, but old messages never enter the DOM.
   const visibleMessages = useMemo(
-    () => (messages || []).slice(-50),
+    () => (Array.isArray(messages) ? messages : []).slice(-50),
     [messages]
   );
 
