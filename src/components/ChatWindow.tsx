@@ -198,18 +198,43 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
     }
   }, [messages, chat.id, currentUser.id]);
 
-  // Read Receipts Trigger
+  // Read Receipts: keep work bounded and never compete with typing.
+  // The server marks only the newest 50 unread incoming messages.
   useEffect(() => {
     if (!chat || !chat.id) return;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
     const markReadIfVisible = () => {
-      if (document.hasFocus() && document.visibilityState === 'visible') {
-        apiMarkRead(chat.id).catch(() => {});
+      if (
+        !document.hasFocus() ||
+        document.visibilityState !== 'visible'
+      ) {
+        return;
       }
+
+      const activeElement = document.activeElement as HTMLElement | null;
+      if (
+        activeElement &&
+        (activeElement.tagName === 'INPUT' ||
+          activeElement.tagName === 'TEXTAREA' ||
+          activeElement.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        apiMarkRead(chat.id).catch(() => {});
+      }, 350);
     };
+
     markReadIfVisible();
     window.addEventListener('focus', markReadIfVisible);
     document.addEventListener('visibilitychange', markReadIfVisible);
+
     return () => {
+      if (timer) clearTimeout(timer);
       window.removeEventListener('focus', markReadIfVisible);
       document.removeEventListener('visibilitychange', markReadIfVisible);
     };
