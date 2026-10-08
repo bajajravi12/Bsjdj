@@ -1,5 +1,5 @@
 // AARVI Production Messenger Service Worker for Push Notifications, PWA Standalone Launch & Offline Caching
-const CACHE_NAME = 'aarvi-messenger-v3';
+const CACHE_NAME = 'aarvi-messenger-v4';
 
 const PRECACHE_ASSETS = [
   '/',
@@ -91,17 +91,17 @@ self.addEventListener('fetch', (event) => {
     url.pathname.endsWith('.webmanifest')
   ) {
     event.respondWith(
-      caches.match(request).then((cachedResponse) => {
-        const fetchPromise = fetch(request).then((networkResponse) => {
+      fetch(request)
+        .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
             const responseToCache = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(request, responseToCache));
           }
           return networkResponse;
-        }).catch(() => cachedResponse);
-
-        return cachedResponse || fetchPromise;
-      })
+        })
+        .catch(() => caches.match(request).then((cachedResponse) =>
+          cachedResponse || new Response('', { status: 503 })
+        ))
     );
     return;
   }
