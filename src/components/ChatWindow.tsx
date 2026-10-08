@@ -167,7 +167,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     );
   }, [chat.id, messages?.length, currentUser.id]);
 
-  // Smart Auto scroll to bottom for messages arriving after the chat is open.
+  // Smart Auto scroll only when a message is actually added.
+  // Edits, reactions, read/delivered status changes, etc. must never pull
+  // the user back to the bottom while they are reading older messages.
   useEffect(() => {
     if (skipAutoScrollOnceRef.current) {
       skipAutoScrollOnceRef.current = false;
@@ -183,7 +185,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     } else {
       setShowNewMessageBanner(true);
     }
-  }, [messages, chat.id, currentUser.id]);
+  }, [messages?.length, messages?.[messages.length - 1]?.id, chat.id, currentUser.id]);
 
   // Read Receipts Trigger
   useEffect(() => {
