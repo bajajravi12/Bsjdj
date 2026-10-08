@@ -105,6 +105,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const isTypingActiveRef = useRef<boolean>(false);
   const longPressTimerRef = useRef<any>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const skipAutoScrollOnceRef = useRef(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -128,8 +129,51 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   };
 
-  // Smart Auto scroll to bottom
+  // Position a newly opened chat immediately at the most relevant place.
+  // If there are unread incoming messages, show the first unread message.
+  // Otherwise show the newest messages. No animated scroll from the top.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || !messages || messages.length === 0) return;
+
+    skipAutoScrollOnceRef.current = true;
+
+    const firstUnreadIndex = messages.findIndex(
+      (message) =>
+        message.senderId !== currentUser.id &&
+        message.status !== 'read'
+    );
+
+    if (firstUnreadIndex >= 0) {
+      const unreadElement = container.querySelector(
+        `[data-message-index="${firstUnreadIndex}"]`
+      ) as HTMLElement | null;
+
+      if (unreadElement) {
+        container.scrollTop = Math.max(
+          0,
+          unreadElement.offsetTop - container.clientHeight * 0.35
+        );
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
+    } else {
+      container.scrollTop = container.scrollHeight;
+    }
+
+    setShowNewMessageBanner(false);
+    setIsNearBottom(
+      container.scrollHeight - container.scrollTop - container.clientHeight <= 120
+    );
+  }, [chat.id, messages?.length, currentUser.id]);
+
+  // Smart Auto scroll to bottom for messages arriving after the chat is open.
   useEffect(() => {
+    if (skipAutoScrollOnceRef.current) {
+      skipAutoScrollOnceRef.current = false;
+      return;
+    }
+
     if (!messages || messages.length === 0) return;
     const lastMsg = messages[messages.length - 1];
     const isSelf = lastMsg?.senderId === currentUser.id;
@@ -510,7 +554,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             </p>
           </div>
         ) : (
-          (messages || []).map((msg) => {
+          (messages || []).map((msg, index) => {
             const isSelf = msg.senderId === currentUser.id;
             const isVoice = msg.mediaType === 'voice';
             const isImage = msg.mediaType === 'image';
@@ -519,6 +563,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             return (
               <div
                 key={msg.id}
+                data-message-index={index}
                 className={`flex flex-col group ${isSelf ? 'items-end' : 'items-start'}`}
                 onContextMenu={(e) => openContextMenu(e, msg)}
                 onClick={(e) => {
