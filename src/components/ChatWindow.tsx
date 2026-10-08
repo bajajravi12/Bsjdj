@@ -106,6 +106,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const longPressTimerRef = useRef<any>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const skipAutoScrollOnceRef = useRef(false);
+  const lastAutoScrollMessageIdRef = useRef<string | null>(null);
+  const openedChatIdRef = useRef<string | null>(null);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -136,7 +138,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     const container = scrollContainerRef.current;
     if (!container || !messages || messages.length === 0) return;
 
+    // Only position the scroll when entering a different chat.
+    // Do NOT reposition when the message list is refreshed, read receipts arrive,
+    // messages are edited/reacted to, or the list length changes.
+    if (openedChatIdRef.current === chat.id) return;
+    openedChatIdRef.current = chat.id;
     skipAutoScrollOnceRef.current = true;
+    lastAutoScrollMessageIdRef.current = messages[messages.length - 1]?.id || null;
 
     const firstUnreadIndex = messages.findIndex(
       (message) =>
@@ -165,7 +173,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     setIsNearBottom(
       container.scrollHeight - container.scrollTop - container.clientHeight <= 120
     );
-  }, [chat.id, messages?.length, currentUser.id]);
+  }, [chat.id, currentUser.id]);
 
   // Smart Auto scroll only when a message is actually added.
   // Edits, reactions, read/delivered status changes, etc. must never pull
@@ -177,7 +185,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     }
 
     if (!messages || messages.length === 0) return;
+
     const lastMsg = messages[messages.length - 1];
+    const lastMessageId = lastMsg?.id || null;
+    if (!lastMessageId) return;
+
+    // A refresh/reconciliation can recreate the messages array without adding
+    // a new message. Only react when the newest message ID actually changes.
+    if (lastAutoScrollMessageIdRef.current === lastMessageId) return;
+    lastAutoScrollMessageIdRef.current = lastMessageId;
+
     const isSelf = lastMsg?.senderId === currentUser.id;
 
     if (isSelf || isNearBottom) {
@@ -185,7 +202,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     } else {
       setShowNewMessageBanner(true);
     }
-  }, [messages?.length, messages?.[messages.length - 1]?.id, chat.id, currentUser.id]);
+  }, [messages?.[messages.length - 1]?.id, chat.id, currentUser.id]);
 
   // Read Receipts Trigger
   useEffect(() => {
