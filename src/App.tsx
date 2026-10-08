@@ -224,18 +224,32 @@ export default function App() {
   /*
    * Cache messages.
    */
+  // Cache writes can be very expensive for a long chat because serializing
+  // the complete messagesMap blocks the browser main thread. Never serialize
+  // a huge history on every realtime status update; debounce it instead.
+  const messageCacheTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (
-      messagesMap &&
-      Object.keys(messagesMap).length > 0
-    ) {
+    if (!messagesMap || Object.keys(messagesMap).length === 0) return;
+
+    if (messageCacheTimerRef.current) {
+      clearTimeout(messageCacheTimerRef.current);
+    }
+
+    messageCacheTimerRef.current = setTimeout(() => {
       try {
         localStorage.setItem(
           'aarvi_messages_cache',
           JSON.stringify(messagesMap)
         );
       } catch {}
-    }
+      messageCacheTimerRef.current = null;
+    }, 1500);
+
+    return () => {
+      if (messageCacheTimerRef.current) {
+        clearTimeout(messageCacheTimerRef.current);
+      }
+    };
   }, [messagesMap]);
 
   /*
@@ -655,26 +669,27 @@ export default function App() {
               readMessageIds
             } = data;
 
-            setMessagesMap(
-              (prevMap) => ({
-                ...prevMap,
+            setMessagesMap((prevMap) => {
+              const current = prevMap[chatId] || [];
+              const ids = new Set<string>(
+                Array.isArray(readMessageIds) ? readMessageIds : []
+              );
 
-                [chatId]:
-                  (
-                    prevMap[
-                      chatId
-                    ] || []
-                  ).map((m) =>
-                    readMessageIds &&
-                    readMessageIds.includes(m.id)
-                      ? {
-                          ...m,
-                          status: 'read'
-                        }
-                      : m
-                  )
-              })
-            );
+              // Do not scan/recreate a huge history when this read event has
+              // nothing relevant to the locally loaded chat.
+              if (!ids.size || !current.some((m) => ids.has(m.id))) {
+                return prevMap;
+              }
+
+              return {
+                ...prevMap,
+                [chatId]: current.map((m) =>
+                  ids.has(m.id) && m.status !== 'read'
+                    ? { ...m, status: 'read' }
+                    : m
+                )
+              };
+            });
           }
 
           else if (
@@ -686,33 +701,27 @@ export default function App() {
               deliveredMessageIds
             } = data;
 
-            setMessagesMap(
-              (prevMap) => ({
-                ...prevMap,
+            setMessagesMap((prevMap) => {
+              const current = prevMap[chatId] || [];
+              const ids = Array.isArray(deliveredMessageIds)
+                ? new Set<string>(deliveredMessageIds)
+                : null;
 
-                [chatId]:
-                  (
-                    prevMap[
-                      chatId
-                    ] || []
-                  ).map((m) =>
-                    (
-                      !deliveredMessageIds ||
-                      deliveredMessageIds.includes(
-                        m.id
-                      )
-                    )
-                      ? {
-                          ...m,
-                          status:
-                            m.status === 'read'
-                              ? 'read'
-                              : 'delivered'
-                        }
-                      : m
-                  )
-              })
-            );
+              if (ids && (!ids.size || !current.some((m) => ids.has(m.id)))) {
+                return prevMap;
+              }
+
+              let changed = false;
+              const next = current.map((m) => {
+                if (ids && !ids.has(m.id)) return m;
+                const nextStatus = m.status === 'read' ? 'read' : 'delivered';
+                if (m.status === nextStatus) return m;
+                changed = true;
+                return { ...m, status: nextStatus };
+              });
+
+              return changed ? { ...prevMap, [chatId]: next } : prevMap;
+            });
           }
 
           else if (
