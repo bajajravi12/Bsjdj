@@ -156,6 +156,9 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
   // Scroll & Auto-Scroll State
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [showNewMessageBanner, setShowNewMessageBanner] = useState(false);
+  // Keep the DOM small for long chats. The full history stays in memory; older
+  // messages are rendered only when the user explicitly asks for them.
+  const [visibleMessageCount, setVisibleMessageCount] = useState(50);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -198,7 +201,7 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
     }
   }, [messages, chat.id, currentUser.id]);
 
-  // Read Receipts: keep work bounded and never compete with typing.
+  // Read Receipts: keep work bounded and independent from the composer.
   // The server marks only the newest 50 unread incoming messages.
   useEffect(() => {
     if (!chat || !chat.id) return;
@@ -209,16 +212,6 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
       if (
         !document.hasFocus() ||
         document.visibilityState !== 'visible'
-      ) {
-        return;
-      }
-
-      const activeElement = document.activeElement as HTMLElement | null;
-      if (
-        activeElement &&
-        (activeElement.tagName === 'INPUT' ||
-          activeElement.tagName === 'TEXTAREA' ||
-          activeElement.isContentEditable)
       ) {
         return;
       }
@@ -239,6 +232,17 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
       document.removeEventListener('visibilitychange', markReadIfVisible);
     };
   }, [chat.id, (messages || []).length]);
+
+  // Reset the render window when switching conversations. This does not
+  // delete or truncate the actual message history.
+  useEffect(() => {
+    setVisibleMessageCount(50);
+  }, [chat.id]);
+
+  const visibleMessages = useMemo(() => {
+    const all = messages || [];
+    return all.slice(Math.max(0, all.length - visibleMessageCount));
+  }, [messages, visibleMessageCount]);
 
   // IMPORTANT: never perform network/state work on every keystroke.
   // The composer must stay on the browser's native input path.
@@ -564,8 +568,7 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
           </span>
         </div>
 
-        {useMemo(() => (
-          (messages || []).length === 0 ? (
+        {visibleMessages.length === 0 ? (
             <div className="p-8 text-center text-xs text-slate-500 space-y-2 max-w-sm mx-auto mt-12">
               <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400 mx-auto">
                 <Lock className="w-6 h-6" />
@@ -576,7 +579,7 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
               </p>
             </div>
           ) : (
-            (messages || []).map((msg) => {
+            visibleMessages.map((msg) => {
               const isSelf = msg.senderId === currentUser.id;
               const isVoice = msg.mediaType === 'voice';
               const isImage = msg.mediaType === 'image';
@@ -736,7 +739,17 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
               );
             })
           )
-        ), [messages, currentUser.id, activePlayingVoiceId])}
+        )}
+        {visibleMessages.length < (messages || []).length && (
+          <div className="flex justify-center py-1">
+            <button
+              type="button"
+              onClick={() => setVisibleMessageCount((count) => Math.min(count + 50, (messages || []).length))}
+              className="px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-[10px] font-semibold text-slate-400 hover:text-emerald-300 hover:border-emerald-500/40 transition-colors"
+            >
+              Load older messages ({visibleMessages.length}/{messages.length})
+            </button>
+          </div>
         )}
 
         {chat.isTyping && (
