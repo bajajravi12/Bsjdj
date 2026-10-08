@@ -1387,6 +1387,16 @@ export default function App() {
         handleVisibilityChange
       );
 
+      window.removeEventListener(
+        'focus',
+        handleVisibilityChange
+      );
+    };
+  }, [
+    isLoggedIn,
+    currentUser?.id
+  ]);
+
   useEffect(() => {
     if (!isLoggedIn || !currentUser || !activeChatId) return;
 
