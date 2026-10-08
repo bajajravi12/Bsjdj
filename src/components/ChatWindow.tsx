@@ -731,7 +731,7 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
               );
             })
           )
-        )}
+        }
 
         {chat.isTyping && (
           <div className="flex items-center space-x-2 text-xs text-emerald-400 bg-slate-900/95 border border-slate-800 rounded-full px-3.5 py-1.5 w-fit shadow-lg animate-pulse my-2">
