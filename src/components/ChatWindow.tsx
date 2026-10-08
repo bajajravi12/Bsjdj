@@ -428,6 +428,11 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
 
   const safeMessages = Array.isArray(messages) ? messages : [];
   const safeMembers = Array.isArray(chat.members) ? chat.members : [];
+  const safeChatId = typeof chat.id === 'string' ? chat.id : '';
+  const safeChatName = typeof chat.name === 'string' && chat.name.trim()
+    ? chat.name
+    : 'Chat';
+  const safeAvatar = typeof chat.avatar === 'string' ? chat.avatar : '';
   const safeFingerprint =
     typeof chat.encryptionFingerprint === 'string'
       ? chat.encryptionFingerprint
@@ -437,7 +442,7 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
 
   const otherMember = safeMembers.find((m) => m.id !== currentUser.id && m.id !== 'usr-self');
   const presenceInfo = formatLastSeen(otherMember?.status, otherMember?.lastSeen);
-  const displayAvatar = getDisplayAvatar(chat.name, chat.avatar, chat.id);
+  const displayAvatar = getDisplayAvatar(safeChatName, safeAvatar, safeChatId);
 
   return (
     <div className="flex-1 min-w-0 min-h-0 flex flex-col h-full bg-slate-950 relative overflow-hidden font-sans select-none">
@@ -464,7 +469,7 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
           <div className="relative flex-shrink-0">
             <img
               src={displayAvatar}
-              alt={chat.name}
+              alt={safeChatName}
               className="w-10 h-10 rounded-full object-cover border border-slate-700 bg-slate-800"
             />
             {presenceInfo.isOnline ? (
@@ -476,7 +481,7 @@ const ChatWindowComponent: React.FC<ChatWindowProps> = ({
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center space-x-1.5 min-w-0">
-              <h3 className="font-bold text-sm text-slate-100 truncate">{chat.name}</h3>
+              <h3 className="font-bold text-sm text-slate-100 truncate">{safeChatName}</h3>
               {chat.isSecret && (
                 <span className="bg-amber-500/20 text-amber-300 text-[10px] font-semibold px-1.5 py-0.2 rounded border border-amber-500/30 flex items-center gap-0.5">
                   <Flame className="w-2.5 h-2.5" /> Secret Vault
