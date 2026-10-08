@@ -98,6 +98,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [showNewMessageBanner, setShowNewMessageBanner] = useState(false);
 
+  // Once the user manually scrolls away from the bottom, automatic scrolling
+  // must never take control back. This is intentionally independent of React
+  // render/state updates so read receipts, typing, reactions, etc. cannot jump
+  // the viewport while the user is reading older messages.
+  const userScrollLockRef = useRef(false);
+  const userScrollLockTimerRef = useRef<any>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const recordingTimerRef = useRef<any>(null);
@@ -114,8 +121,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     setTimeout(() => setToastMsg(null), 2500);
   };
 
-  const scrollToBottom = (smooth = true) => {
-    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
+  const scrollToBottom = (smooth = false) => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    // Scroll the message container itself. Do not use scrollIntoView(), which
+    // can involve ancestor scrolling and can continue an animation after the
+    // user starts dragging upward.
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: smooth ? 'smooth' : 'auto',
+    });
     setShowNewMessageBanner(false);
     setIsNearBottom(true);
   };
@@ -123,8 +139,21 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const handleScroll = () => {
     const container = scrollContainerRef.current;
     if (!container) return;
+
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     const near = distanceFromBottom <= 120;
+
+    // Any real user scroll away from the bottom gets an explicit lock. Keep it
+    // active briefly after the gesture ends so a late render/read update cannot
+    // immediately pull the user back down.
+    if (!near) {
+      userScrollLockRef.current = true;
+      if (userScrollLockTimerRef.current) clearTimeout(userScrollLockTimerRef.current);
+      userScrollLockTimerRef.current = setTimeout(() => {
+        userScrollLockRef.current = false;
+      }, 1200);
+    }
+
     setIsNearBottom(near);
     if (near) {
       setShowNewMessageBanner(false);
@@ -197,8 +226,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
     const isSelf = lastMsg?.senderId === currentUser.id;
 
+    // Never take control from a user who is reading older messages.
+    if (userScrollLockRef.current) {
+      setShowNewMessageBanner(true);
+      return;
+    }
+
     if (isSelf || isNearBottom) {
-      scrollToBottom(true);
+      // New messages can auto-position, but do it instantly. Smooth scrolling
+      // is reserved for the explicit "New Message" button so the browser cannot
+      // keep an animation running while the user scrolls upward.
+      scrollToBottom(false);
     } else {
       setShowNewMessageBanner(true);
     }
@@ -555,6 +593,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         ref={scrollContainerRef}
         onScroll={handleScroll}
         className="flex-1 min-w-0 min-h-0 overflow-y-auto p-3 sm:p-4 space-y-3.5 bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900/60 relative"
+        style={{ overflowAnchor: 'none', overscrollBehaviorY: 'contain' }}
       >
         <div className="text-center my-2">
           <span className="bg-slate-900/90 text-slate-400 text-[10px] font-semibold uppercase tracking-wider px-3 py-1 rounded-full border border-slate-800">
