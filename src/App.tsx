@@ -225,32 +225,18 @@ export default function App() {
   /*
    * Cache messages.
    */
-  // Cache writes can be very expensive for a long chat because serializing
-  // the complete messagesMap blocks the browser main thread. Never serialize
-  // a huge history on every realtime status update; debounce it instead.
-  const messageCacheTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!messagesMap || Object.keys(messagesMap).length === 0) return;
-
-    if (messageCacheTimerRef.current) {
-      clearTimeout(messageCacheTimerRef.current);
-    }
-
-    messageCacheTimerRef.current = setTimeout(() => {
+    if (
+      messagesMap &&
+      Object.keys(messagesMap).length > 0
+    ) {
       try {
         localStorage.setItem(
           'aarvi_messages_cache',
           JSON.stringify(messagesMap)
         );
       } catch {}
-      messageCacheTimerRef.current = null;
-    }, 1500);
-
-    return () => {
-      if (messageCacheTimerRef.current) {
-        clearTimeout(messageCacheTimerRef.current);
-      }
-    };
+    }
   }, [messagesMap]);
 
   /*
@@ -670,27 +656,26 @@ export default function App() {
               readMessageIds
             } = data;
 
-            setMessagesMap((prevMap) => {
-              const current = prevMap[chatId] || [];
-              const ids = new Set<string>(
-                Array.isArray(readMessageIds) ? readMessageIds : []
-              );
-
-              // Do not scan/recreate a huge history when this read event has
-              // nothing relevant to the locally loaded chat.
-              if (!ids.size || !current.some((m) => ids.has(m.id))) {
-                return prevMap;
-              }
-
-              return {
+            setMessagesMap(
+              (prevMap) => ({
                 ...prevMap,
-                [chatId]: current.map((m) =>
-                  ids.has(m.id) && m.status !== 'read'
-                    ? { ...m, status: 'read' }
-                    : m
-                )
-              };
-            });
+
+                [chatId]:
+                  (
+                    prevMap[
+                      chatId
+                    ] || []
+                  ).map((m) =>
+                    readMessageIds &&
+                    readMessageIds.includes(m.id)
+                      ? {
+                          ...m,
+                          status: 'read'
+                        }
+                      : m
+                  )
+              })
+            );
           }
 
           else if (
@@ -702,27 +687,33 @@ export default function App() {
               deliveredMessageIds
             } = data;
 
-            setMessagesMap((prevMap) => {
-              const current = prevMap[chatId] || [];
-              const ids = Array.isArray(deliveredMessageIds)
-                ? new Set<string>(deliveredMessageIds)
-                : null;
+            setMessagesMap(
+              (prevMap) => ({
+                ...prevMap,
 
-              if (ids && (!ids.size || !current.some((m) => ids.has(m.id)))) {
-                return prevMap;
-              }
-
-              let changed = false;
-              const next = current.map((m) => {
-                if (ids && !ids.has(m.id)) return m;
-                const nextStatus = m.status === 'read' ? 'read' : 'delivered';
-                if (m.status === nextStatus) return m;
-                changed = true;
-                return { ...m, status: nextStatus };
-              });
-
-              return changed ? { ...prevMap, [chatId]: next } : prevMap;
-            });
+                [chatId]:
+                  (
+                    prevMap[
+                      chatId
+                    ] || []
+                  ).map((m) =>
+                    (
+                      !deliveredMessageIds ||
+                      deliveredMessageIds.includes(
+                        m.id
+                      )
+                    )
+                      ? {
+                          ...m,
+                          status:
+                            m.status === 'read'
+                              ? 'read'
+                              : 'delivered'
+                        }
+                      : m
+                  )
+              })
+            );
           }
 
           else if (
@@ -1397,53 +1388,29 @@ export default function App() {
     currentUser?.id
   ]);
 
+  /*
+   * Typing fallback for Cloudflare Worker instances.
+   * SSE is still the instant path; this short poll reads durable D1 state
+   * when sender and recipient land on different Worker instances.
+   */
   useEffect(() => {
     if (!isLoggedIn || !currentUser || !activeChatId) return;
 
     let stopped = false;
     const pollTyping = async () => {
-      // Do not run a typing-state React update while the message composer has
-      // keyboard focus. This avoids competing with the browser's input thread
-      // on long-history chats.
-      const activeElement = document.activeElement as HTMLElement | null;
-      if (
-        activeElement &&
-        (activeElement.tagName === 'INPUT' ||
-          activeElement.tagName === 'TEXTAREA' ||
-          activeElement.isContentEditable)
-      ) {
-        return;
-      }
-
       const result = await apiGetTyping(activeChatId);
       if (stopped) return;
 
       const typing = result?.typing;
-      const nextIsTyping = Boolean(typing);
-      const nextTypingUserName = typing?.userName || undefined;
-
-      setChats((prev) => {
-        const currentChat = (prev || []).find((chat) => chat.id === activeChatId);
-        if (
-          currentChat &&
-          Boolean(currentChat.isTyping) === nextIsTyping &&
-          currentChat.typingUserName === nextTypingUserName
-        ) {
-          // Critical: don't create a new chat object when nothing changed.
-          // That would force the entire long chat tree to render again.
-          return prev;
-        }
-
-        return (prev || []).map((chat) =>
-          chat.id === activeChatId
-            ? {
-                ...chat,
-                isTyping: nextIsTyping,
-                typingUserName: nextTypingUserName,
-              }
-            : chat
-        );
-      });
+      setChats((prev) => (prev || []).map((chat) =>
+        chat.id === activeChatId
+          ? {
+              ...chat,
+              isTyping: Boolean(typing),
+              typingUserName: typing?.userName || undefined,
+            }
+          : chat
+      ));
     };
 
     pollTyping();
