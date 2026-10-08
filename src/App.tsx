@@ -1,3 +1,4 @@
+// Build marker: latest deployment includes the App.tsx syntax fix and 50-message UI bound.
 import React, { useState, useEffect, useRef } from 'react';
 import { Chat, Message, User, AppSettings } from './types';
 import { LoginScreen } from './components/LoginScreen';
