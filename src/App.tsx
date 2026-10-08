@@ -1443,11 +1443,6 @@ export default function App() {
       clearInterval(timer);
     };
   }, [isLoggedIn, currentUser?.id, activeChatId]);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
-  }, [isLoggedIn, currentUser?.id, activeChatId]);
 
   /*
    * Presence heartbeat.
