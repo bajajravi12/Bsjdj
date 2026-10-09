@@ -2340,21 +2340,32 @@ export default function App() {
       ? messagesMap[activeChatId].slice(-100)
       : [];
 
-  // Temporary app-wide suspension screen. Keep this gate enabled until the
-  // owner explicitly asks to restore the normal AARVI interface.
+  // Temporary app-wide connection error screen. Keep the normal app hidden
+  // until the owner explicitly asks to restore it.
   return (
     <div
-      className="fixed inset-0 flex min-h-screen w-full items-center justify-center bg-white px-6 text-center"
-      style={{ color: '#111111', zIndex: 999999 }}
+      className="fixed inset-0 min-h-screen w-full overflow-auto bg-white px-6"
+      style={{ color: '#202124', zIndex: 999999, fontFamily: 'Arial, sans-serif' }}
     >
-      <div className="space-y-3">
-        <p className="text-base font-medium tracking-wide sm:text-lg">
-          Your web app has been suspended.
+      <main className="mx-auto flex min-h-screen w-full max-w-xl flex-col justify-center pb-16">
+        <div className="mb-8 flex h-12 w-12 items-center justify-center rounded-full border border-gray-200 text-gray-500">
+          <svg width="25" height="25" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 8v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <circle cx="12" cy="16.5" r="1" fill="currentColor" />
+            <path d="M10.3 3.8 2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <h1 className="mb-4 text-2xl font-normal leading-snug sm:text-3xl">
+          This site can’t be reached
+        </h1>
+        <p className="mb-3 text-sm leading-6 text-gray-700 sm:text-base">
+          The connection to <strong>rv.gamerlife659.workers.dev</strong> was interrupted.
         </p>
-        <p className="text-sm font-medium text-gray-500 sm:text-base">
-          Connection Error
+        <p className="mb-6 text-sm leading-6 text-gray-600">
+          The web app is temporarily unavailable. Please try again later.
         </p>
-      </div>
+        <p className="text-xs text-gray-500">ERR_CONNECTION_CLOSED</p>
+      </main>
     </div>
   );
 
