@@ -2332,12 +2332,12 @@ export default function App() {
         activeChatId
     ) || null;
 
-  // Only pass the newest 50 messages into the active chat UI.
+  // Only pass the newest 100 messages into the active chat UI.
   // Full history remains in messagesMap/cache, but old messages never reach ChatWindow.
   const activeMessages =
     activeChatId &&
     Array.isArray(messagesMap[activeChatId])
-      ? messagesMap[activeChatId].slice(-50)
+      ? messagesMap[activeChatId].slice(-100)
       : [];
 
   if (
