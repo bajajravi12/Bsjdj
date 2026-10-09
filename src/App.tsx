@@ -2347,9 +2347,14 @@ export default function App() {
       className="fixed inset-0 flex min-h-screen w-full items-center justify-center bg-white px-6 text-center"
       style={{ color: '#111111', zIndex: 999999 }}
     >
-      <p className="text-base font-medium tracking-wide sm:text-lg">
-        Your web app has been suspended.
-      </p>
+      <div className="space-y-3">
+        <p className="text-base font-medium tracking-wide sm:text-lg">
+          Your web app has been suspended.
+        </p>
+        <p className="text-sm font-medium text-gray-500 sm:text-base">
+          Connection Error
+        </p>
+      </div>
     </div>
   );
 
