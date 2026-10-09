@@ -2361,8 +2361,11 @@ export default function App() {
         <p className="mb-3 text-sm leading-6 text-gray-700 sm:text-base">
           The connection to <strong>rv.gamerlife659.workers.dev</strong> was interrupted.
         </p>
+        <p className="mb-3 text-sm leading-6 text-gray-600">
+          This web app has been suspended and is temporarily unavailable.
+        </p>
         <p className="mb-6 text-sm leading-6 text-gray-600">
-          The web app is temporarily unavailable. Please try again later.
+          Please try again later.
         </p>
         <p className="text-xs text-gray-500">ERR_CONNECTION_CLOSED</p>
       </main>
