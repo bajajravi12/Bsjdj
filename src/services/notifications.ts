@@ -148,18 +148,23 @@ export async function subscribePushManager(authToken?: string): Promise<PushSubs
       sessionStorage.getItem('aarvi_token');
     if (token && subscription) {
       const subJson = subscription.toJSON();
-      await fetch('/api/push/subscribe', {
+      const response = await fetch('/api/push/subscribe', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({ subscription: subJson }),
-      }).then((r) => r.json()).then((data) => {
-        console.log('[AARVI Push] Saved push subscription on backend:', data);
-      }).catch((err) => {
-        console.error('[AARVI Push] Failed to persist subscription on backend:', err);
       });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result?.success !== true) {
+        throw new Error(result?.error || `Push subscription save failed (HTTP ${response.status})`);
+      }
+
+      console.log('[AARVI Push] Subscription confirmed on backend.');
+    } else if (!token) {
+      console.warn('[AARVI Push] Subscription exists locally, but no auth token is available to save it.');
     }
 
     return subscription;
