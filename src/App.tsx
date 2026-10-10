@@ -1074,10 +1074,12 @@ export default function App() {
   ]);
 
   /*
-   * Background fallback sync.
+   * Fast cross-instance message sync.
    *
-   * SSE handles realtime.
-   * This runs every 5 seconds as a reliable cross-instance fallback.
+   * SSE delivers immediately when both connections reach the same Worker
+   * instance. Cloudflare may route them to different instances, so durable
+   * D1 sync must fill that gap quickly instead of leaving messages waiting
+   * for the old 5-second polling interval.
    */
   useEffect(() => {
     if (!isLoggedIn || !currentUser) {
@@ -1336,16 +1338,15 @@ export default function App() {
     pollSync();
 
     /*
-     * Polling is now the primary realtime mechanism (5s), since SSE
-     * broadcast via in-memory activeStreams only works when sender and
-     * recipient happen to land on the same Worker instance — which
-     * Cloudflare does not guarantee. Incremental /api/sync makes this
-     * cheap even at this frequency (usually 0 new rows per call).
+     * Keep a 1-second durable-sync fallback for cross-instance delivery.
+     * This limits the delay when SSE's in-memory stream registry cannot
+     * reach a recipient connected to another Cloudflare Worker instance.
+     * The isSyncingRef lock prevents overlapping sync requests.
      */
     const syncInterval =
       setInterval(
         pollSync,
-        5000
+        1000
       );
 
     const handleVisibilityChange =
