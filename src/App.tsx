@@ -1074,12 +1074,10 @@ export default function App() {
   ]);
 
   /*
-   * Fast cross-instance message sync.
+   * Background fallback sync.
    *
-   * SSE delivers immediately when both connections reach the same Worker
-   * instance. Cloudflare may route them to different instances, so durable
-   * D1 sync must fill that gap quickly instead of leaving messages waiting
-   * for the old 5-second polling interval.
+   * SSE handles realtime.
+   * This runs every 5 seconds as a reliable cross-instance fallback.
    */
   useEffect(() => {
     if (!isLoggedIn || !currentUser) {
@@ -1338,15 +1336,16 @@ export default function App() {
     pollSync();
 
     /*
-     * Keep a 1-second durable-sync fallback for cross-instance delivery.
-     * This limits the delay when SSE's in-memory stream registry cannot
-     * reach a recipient connected to another Cloudflare Worker instance.
-     * The isSyncingRef lock prevents overlapping sync requests.
+     * Polling is now the primary realtime mechanism (5s), since SSE
+     * broadcast via in-memory activeStreams only works when sender and
+     * recipient happen to land on the same Worker instance — which
+     * Cloudflare does not guarantee. Incremental /api/sync makes this
+     * cheap even at this frequency (usually 0 new rows per call).
      */
     const syncInterval =
       setInterval(
         pollSync,
-        1000
+        5000
       );
 
     const handleVisibilityChange =
@@ -2020,6 +2019,328 @@ export default function App() {
                       );
 
                     if (
+                      hasUser
+                    ) {
+                      const newUsers =
+                        existing.users.filter(
+                          (userId) =>
+                            userId !==
+                            currentUser.id
+                        );
+
+                      updatedReactions =
+                        reactions
+                          .map(
+                            (
+                              reaction
+                            ) =>
+                              reaction.emoji ===
+                              emoji
+                                ? {
+                                    ...reaction,
+                                    count:
+                                      newUsers.length,
+                                    users:
+                                      newUsers
+                                  }
+                                : reaction
+                          )
+                          .filter(
+                            (
+                              reaction
+                            ) =>
+                              reaction.count >
+                              0
+                          );
+                    } else {
+                      const newUsers =
+                        [
+                          ...existing.users,
+                          currentUser.id
+                        ];
+
+                      updatedReactions =
+                        reactions.map(
+                          (
+                            reaction
+                          ) =>
+                            reaction.emoji ===
+                            emoji
+                              ? {
+                                  ...reaction,
+                                  count:
+                                    newUsers.length,
+                                  users:
+                                    newUsers
+                                }
+                              : reaction
+                        );
+                    }
+                  } else {
+                    updatedReactions =
+                      [
+                        ...reactions,
+                        {
+                          emoji,
+                          count:
+                            1,
+                          users:
+                            [
+                              currentUser.id
+                            ]
+                        }
+                      ];
+                  }
+
+                  return {
+                    ...message,
+                    reactions:
+                      updatedReactions
+                  };
+                }
+              )
+          };
+        }
+      );
+
+      try {
+        await apiReactToMessage(
+          messageId,
+          emoji
+        );
+      } catch (
+        err
+      ) {
+        console.error(
+          'React message failed:',
+          err
+        );
+      }
+    };
+
+  /*
+   * Pin message.
+   */
+  const handlePinMessage =
+    async (
+      chatId: string,
+      messageId:
+        | string
+        | null
+    ) => {
+      setChats((prev) =>
+        (
+          prev || []
+        ).map((chat) =>
+          chat.id === chatId
+            ? {
+                ...chat,
+                pinnedMessageId:
+                  messageId ||
+                  undefined
+              }
+            : chat
+        )
+      );
+
+      try {
+        await apiPinMessage(
+          chatId,
+          messageId
+        );
+      } catch (
+        err
+      ) {
+        console.error(
+          'Pin message failed:',
+          err
+        );
+      }
+    };
+
+  /*
+   * Forward message.
+   */
+  const handleForwardMessage =
+    async (
+      targetChatId: string,
+      message: Message
+    ) => {
+      const text =
+        `[Forwarded from ${message.senderName}]: ${message.text}`;
+
+      const fwdIso =
+        new Date()
+          .toISOString();
+
+      await apiSendMessage(
+        targetChatId,
+        text,
+        message.mediaType,
+        message.mediaUrl
+      );
+
+      setMessagesMap(
+        (prev) => {
+          const targetMsgs =
+            prev[
+              targetChatId
+            ] || [];
+
+          const fwdMsg:
+            Message = {
+              id:
+                `fwd-${Date.now()}`,
+              chatId:
+                targetChatId,
+              senderId:
+                currentUser!.id,
+              senderName:
+                currentUser!.name,
+              text,
+              timestamp:
+                fwdIso,
+              isoDate:
+                fwdIso,
+              status:
+                'sent',
+              mediaType:
+                message.mediaType,
+              mediaUrl:
+                message.mediaUrl,
+              isEncrypted:
+                true
+            };
+
+          return {
+            ...prev,
+            [targetChatId]:
+              [
+                ...targetMsgs,
+                fwdMsg
+              ]
+          };
+        }
+      );
+    };
+
+  /*
+   * New chat.
+   */
+  const handleChatCreated =
+    (
+      newChat: Chat
+    ) => {
+      setChats((prev) => {
+        if (
+          (
+            prev || []
+          ).some(
+            (chat) =>
+              chat.id ===
+              newChat.id
+          )
+        ) {
+          return prev;
+        }
+
+        return [
+          newChat,
+          ...(prev || [])
+        ];
+      });
+
+      setActiveChatId(
+        newChat.id
+      );
+    };
+
+  const handleSetSelfDestructTimer =
+    (
+      chatId: string,
+      seconds: number
+    ) => {
+      setChats((prev) =>
+        (
+          prev || []
+        ).map((chat) =>
+          chat.id === chatId
+            ? {
+                ...chat,
+                selfDestructTimer:
+                  seconds
+              }
+            : chat
+        )
+      );
+    };
+
+  /*
+   * Logout.
+   */
+  const handleLogout =
+    () => {
+      // Reset the incremental sync cursor so the next login always restores
+      // the complete account/chat snapshot from D1.
+      lastSyncTimestampRef.current = '';
+
+      clearAuthToken();
+
+      try {
+        localStorage.removeItem(
+          'aarvi_messages_cache'
+        );
+      } catch {}
+
+      setIsLoggedIn(
+        false
+      );
+
+      setCurrentUser(
+        null
+      );
+
+      setChats([]);
+
+      setMessagesMap({});
+
+      setActiveChatId(
+        null
+      );
+    };
+
+  const unreadTotal =
+    (chats || []).reduce(
+      (
+        total,
+        chat
+      ) =>
+        total +
+        (
+          chat?.unreadCount ||
+          0
+        ),
+      0
+    );
+
+  const activeChat =
+    (
+      chats || []
+    ).find(
+      (chat) =>
+        chat.id ===
+        activeChatId
+    ) || null;
+
+  // Only pass the newest 100 messages into the active chat UI.
+  // Full history remains in messagesMap/cache, but old messages never reach ChatWindow.
+  const activeMessages =
+    activeChatId &&
+    Array.isArray(messagesMap[activeChatId])
+      ? messagesMap[activeChatId].slice(-100)
+      : [];
+
+  if (
     isAuthChecking
   ) {
     return (
