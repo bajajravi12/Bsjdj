@@ -625,10 +625,11 @@ async function getD1ChatsForUser(db: any, userId: string): Promise<any[]> {
 
       if (!chat.isGroup && !chat.isSecret) {
         const otherUser = members.find((m) => m.id !== userId);
-        if (otherUser) {
-          displayName = otherUser.name;
-          displayAvatar = otherUser.avatar || generateInitialsAvatarSvg(otherUser.name, otherUser.username);
-        }
+        // If a direct-chat participant was deleted from users, don't show the
+        // orphaned conversation under a misleading/fallback name.
+        if (!otherUser) continue;
+        displayName = otherUser.name;
+        displayAvatar = otherUser.avatar || generateInitialsAvatarSvg(otherUser.name, otherUser.username);
       } else if (chat.isSecret) {
         const otherUser = members.find((m) => m.id !== userId);
         if (otherUser) {
@@ -1295,11 +1296,11 @@ export default {
             let displayName = c.name;
             let displayAvatar = c.avatar;
             if (!c.isGroup && !c.isSecret) {
-              const otherUser = members.find((m) => m.id !== currentUserId);
-              if (otherUser) {
-                displayName = otherUser.name;
-                displayAvatar = otherUser.avatar || c.avatar;
-              }
+              const otherUser = usersDb[c.memberIds.find((id) => id !== currentUserId) || ''];
+              // Don't keep a direct chat whose other account no longer exists.
+              if (!otherUser) return null;
+              displayName = otherUser.name;
+              displayAvatar = otherUser.avatar || c.avatar;
             }
             return {
               ...c,
@@ -1308,7 +1309,7 @@ export default {
               members,
               unreadCount,
             };
-          });
+          }).filter(Boolean);
         }
 
         return jsonResponse({ chats: responseChats });
@@ -1855,8 +1856,6 @@ export default {
               const newMsgs = await getD1NewMessagesForChat(env.DB, cId, since, syncCutoff);
               if (newMsgs.length === 0) continue; // nothing changed — skip entirely
 
-              userMessagesMap[cId] = newMsgs;
-
               const chat = await getD1ChatById(env.DB, cId);
               if (!chat) continue;
 
@@ -1867,10 +1866,10 @@ export default {
               let displayAvatar = chat.avatar;
               if (!chat.isGroup && !chat.isSecret) {
                 const otherUser = members.find((m) => m.id !== currentUserId);
-                if (otherUser) {
-                  displayName = otherUser.name;
-                  displayAvatar = otherUser.avatar || generateInitialsAvatarSvg(otherUser.name, otherUser.username);
-                }
+                // Ignore orphaned direct chats after a user is removed from D1.
+                if (!otherUser) continue;
+                displayName = otherUser.name;
+                displayAvatar = otherUser.avatar || generateInitialsAvatarSvg(otherUser.name, otherUser.username);
               } else if (chat.isSecret) {
                 const otherUser = members.find((m) => m.id !== currentUserId);
                 if (otherUser) {
@@ -1887,6 +1886,7 @@ export default {
                 if (unreadRow) unreadCount = Number(unreadRow.cnt || 0);
               } catch {}
 
+              userMessagesMap[cId] = newMsgs;
               changedChats.push({ ...chat, name: displayName, avatar: displayAvatar, members, unreadCount, pinned: false });
             }
             userChats = changedChats; // may be empty — that's expected and cheap
