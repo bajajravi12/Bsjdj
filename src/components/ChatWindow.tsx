@@ -750,10 +750,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     {isSelf && (
                       <span className="font-bold ml-0.5">
                         {msg.status === 'read' ? (
-                          <CheckCheck className="w-3.5 h-3.5 text-cyan-300 inline" title="Read" />
-                        ) : msg.status === 'delivered' ? (
-                          <CheckCheck className="w-3.5 h-3.5 text-emerald-100/90 inline" title="Delivered" />
-                        ) : msg.status === 'sent' ? (
+                          <CheckCheck className="w-3.5 h-3.5 text-cyan-300 inline" title="Seen" />
+                        ) : msg.status === 'delivered' || msg.status === 'sent' ? (
                           <Check className="w-3.5 h-3.5 text-emerald-100/90 inline" title="Sent" />
                         ) : (
                           '🕒'
