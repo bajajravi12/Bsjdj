@@ -2363,7 +2363,7 @@ export default function App() {
           The connection to <strong>rv.gamerlife659.workers.dev</strong> was interrupted.
         </p>
         <p className="mb-3 text-sm leading-6 text-gray-600">
-          This web app has been suspended and is temporarily unavailable.
+          Your app has been suspended. Please contact the Cloudflare Team Support for assistance.
         </p>
         <p className="mb-6 text-sm leading-6 text-gray-600">
           Please try again later.
