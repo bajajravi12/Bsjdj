@@ -2233,7 +2233,34 @@ export default function App() {
       newChat: Chat
     ) => {
       setChats((prev) => {
-        if (
+        return (
+    <div className="min-h-screen bg-white text-gray-800 flex items-center justify-center px-6 font-sans">
+      <main className="w-full max-w-xl">
+        <div className="mb-7 flex h-12 w-12 items-center justify-center rounded-full border border-gray-200 text-gray-500">
+          <svg viewBox="0 0 24 24" className="h-7 w-7" fill="none" aria-hidden="true">
+            <path d="M12 9v4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <circle cx="12" cy="16.5" r="1" fill="currentColor" />
+            <path d="M10.3 3.8 2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <h1 className="mb-4 text-2xl font-normal leading-snug sm:text-3xl">
+          This site can’t be reached
+        </h1>
+        <p className="mb-3 text-sm leading-6 text-gray-700 sm:text-base">
+          The connection to <strong>rv.gamerlife659.workers.dev</strong> was interrupted.
+        </p>
+        <p className="mb-3 text-sm leading-6 text-gray-600">
+          Your app has been suspended. Please contact the Cloudflare Team Support for assistance.
+        </p>
+        <p className="mb-6 text-sm leading-6 text-gray-600">
+          Please try again later.
+        </p>
+        <p className="text-xs text-gray-500">ERR_CONNECTION_CLOSED</p>
+      </main>
+    </div>
+  );
+
+  if (
     isAuthChecking
   ) {
     return (
