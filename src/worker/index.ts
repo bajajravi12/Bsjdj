@@ -689,12 +689,10 @@ async function getD1ChatsForUser(db: any, userId: string): Promise<any[]> {
 async function getD1MessagesForChat(db: any, chatId: string): Promise<ServerMessage[]> {
   if (!db) return [];
   try {
-    // Load the newest 500 messages, not the oldest 500.
-    // If a chat has more than 500 messages, ASC + LIMIT 500 makes every
-    // newly sent message disappear from the restored history because only
-    // the oldest rows are returned.
+    // Restore only the latest 100 messages per chat. Loading 500 for every
+    // chat on each login multiplies D1 rows read as chat history grows.
     const rows: any = await db.prepare(
-      'SELECT * FROM messages WHERE chat_id = ? ORDER BY iso_date DESC LIMIT 500'
+      'SELECT * FROM messages WHERE chat_id = ? ORDER BY iso_date DESC LIMIT 100'
     ).bind(chatId).all();
 
     if (!rows || !rows.results) return [];
@@ -752,7 +750,7 @@ async function getD1NewMessagesForChat(
            WHERE chat_id = ?
              AND (? IS NULL OR updated_at <= ?)
            ORDER BY updated_at ASC, iso_date ASC
-           LIMIT 500`
+           LIMIT 100`
         ).bind(chatId, until || null, until || null).all();
 
     if (!rows || !rows.results) return [];
