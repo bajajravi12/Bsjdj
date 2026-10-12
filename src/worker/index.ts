@@ -16,6 +16,29 @@ const DEFAULT_VAPID_PUBLIC_KEY = 'BI_i_mvWL_HWGZ4dk-hodyqyi7bi5hR4hVIaHQDb3ZbEyE
 const DEFAULT_VAPID_PRIVATE_KEY = 'olBy0P3ldKvbfSnJFZPz9EbXmVBxIWZ-fLFQO1o4_u4';
 const DEFAULT_VAPID_SUBJECT = 'mailto:admin@aarvi.app';
 
+// D1 indexes keep incremental sync from scanning the entire messages table
+// once per chat on every poll. This cache is per Worker isolate; IF NOT EXISTS
+// makes initialization safe when several isolates start at once.
+let d1SyncIndexesReady = false;
+let d1SyncIndexesPromise: Promise<void> | null = null;
+
+async function ensureD1SyncIndexes(db: any): Promise<void> {
+  if (d1SyncIndexesReady) return;
+  if (!d1SyncIndexesPromise) {
+    d1SyncIndexesPromise = (async () => {
+      await db.batch([
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_chat_updated_at ON messages (chat_id, updated_at)'),
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_chat_members_user_id_chat_id ON chat_members (user_id, chat_id)')
+      ]);
+      d1SyncIndexesReady = true;
+    })().catch((error) => {
+      d1SyncIndexesPromise = null;
+      console.error('[D1] Failed to ensure sync indexes:', error);
+    });
+  }
+  await d1SyncIndexesPromise;
+}
+
 export interface ServerUser {
   id: string;
   name: string;
@@ -1833,6 +1856,9 @@ export default {
         const userMessagesMap: Record<string, ServerMessage[]> = {};
 
         if (env.DB) {
+          // Ensure indexes once per Worker isolate so incremental sync can seek
+          // directly to this user's chat messages instead of scanning the table.
+          await ensureD1SyncIndexes(env.DB);
           if (!since) {
             // First sync after login/reload: full snapshot, as before.
             userChats = await getD1ChatsForUser(env.DB, currentUserId);
