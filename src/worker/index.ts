@@ -28,6 +28,8 @@ async function ensureD1SyncIndexes(db: any): Promise<void> {
     d1SyncIndexesPromise = (async () => {
       await db.batch([
         db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_chat_updated_at ON messages (chat_id, updated_at)'),
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_chat_iso_date ON messages (chat_id, iso_date)'),
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_chat_sender_status ON messages (chat_id, sender_id, status)'),
         db.prepare('CREATE INDEX IF NOT EXISTS idx_chat_members_user_id_chat_id ON chat_members (user_id, chat_id)')
       ]);
       d1SyncIndexesReady = true;
