@@ -1055,7 +1055,7 @@ export default function App() {
             // Note: we deliberately do NOT trigger apiSync() here
             // anymore. When the realtime connection is unstable and
             // reconnects frequently, this handler used to fire just as
-            // often — grabbing the same lock the reliable 5s background
+            // often — grabbing the same lock the reliable 15s background
             // poll uses, and never releasing it long enough for that
             // poll to run. The 5s interval below is now the sole,
             // uncontended path for catching up on messages/chats/
@@ -1077,7 +1077,7 @@ export default function App() {
    * Background fallback sync.
    *
    * SSE handles realtime.
-   * This runs every 5 seconds as a reliable cross-instance fallback.
+   * This runs every 15 seconds as a lower-query cross-instance fallback.
    */
   useEffect(() => {
     if (!isLoggedIn || !currentUser) {
@@ -1336,7 +1336,7 @@ export default function App() {
     pollSync();
 
     /*
-     * Polling is now the primary realtime mechanism (5s), since SSE
+     * Polling is now the fallback realtime mechanism (15s), since SSE
      * broadcast via in-memory activeStreams only works when sender and
      * recipient happen to land on the same Worker instance — which
      * Cloudflare does not guarantee. Incremental /api/sync makes this
@@ -1345,7 +1345,7 @@ export default function App() {
     const syncInterval =
       setInterval(
         pollSync,
-        5000
+        15000
       );
 
     const handleVisibilityChange =
@@ -1414,7 +1414,7 @@ export default function App() {
     };
 
     pollTyping();
-    const timer = setInterval(pollTyping, 1500);
+    const timer = setInterval(pollTyping, 5000);
 
     return () => {
       stopped = true;
