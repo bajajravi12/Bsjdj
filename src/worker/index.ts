@@ -30,6 +30,7 @@ async function ensureD1SyncIndexes(db: any): Promise<void> {
         db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_chat_updated_at ON messages (chat_id, updated_at)'),
         db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_chat_iso_date ON messages (chat_id, iso_date)'),
         db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_chat_sender_status ON messages (chat_id, sender_id, status)'),
+        db.prepare('CREATE INDEX IF NOT EXISTS idx_messages_chat_status_sender ON messages (chat_id, status, sender_id)'),
         db.prepare('CREATE INDEX IF NOT EXISTS idx_chat_members_user_id_chat_id ON chat_members (user_id, chat_id)')
       ]);
       d1SyncIndexesReady = true;
@@ -666,7 +667,7 @@ async function getD1ChatsForUser(db: any, userId: string): Promise<any[]> {
       let unreadCount = 0;
       try {
         const unreadRow: any = await db.prepare(
-          `SELECT COUNT(*) as cnt FROM messages WHERE chat_id = ? AND sender_id != ? AND status != 'read'`
+          `SELECT COUNT(*) as cnt FROM messages WHERE chat_id = ? AND sender_id != ? AND status IN ('sent', 'delivered', 'sending')`
         ).bind(cId, userId).first();
         if (unreadRow) unreadCount = Number(unreadRow.cnt || 0);
       } catch {}
@@ -1907,7 +1908,7 @@ export default {
               let unreadCount = 0;
               try {
                 const unreadRow: any = await env.DB.prepare(
-                  `SELECT COUNT(*) as cnt FROM messages WHERE chat_id = ? AND sender_id != ? AND status != 'read'`
+                  `SELECT COUNT(*) as cnt FROM messages WHERE chat_id = ? AND sender_id != ? AND status IN ('sent', 'delivered', 'sending')`
                 ).bind(cId, currentUserId).first();
                 if (unreadRow) unreadCount = Number(unreadRow.cnt || 0);
               } catch {}
