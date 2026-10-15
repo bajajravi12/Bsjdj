@@ -1416,7 +1416,8 @@ export default function App() {
 
     pollTyping();
     // Typing is transient; reduce DB fallback reads and rely on SSE for instant updates.
-    const timer = setInterval(pollTyping, 30000);
+    // Typing is transient; poll D1 fallback less often to reduce read queries.
+    const timer = setInterval(pollTyping, 60000);
 
     return () => {
       stopped = true;
