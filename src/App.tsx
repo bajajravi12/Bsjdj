@@ -1398,6 +1398,7 @@ export default function App() {
 
     let stopped = false;
     const pollTyping = async () => {
+      if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
       const result = await apiGetTyping(activeChatId);
       if (stopped) return;
 
@@ -1414,7 +1415,8 @@ export default function App() {
     };
 
     pollTyping();
-    const timer = setInterval(pollTyping, 15000);
+    // Typing is transient; reduce DB fallback reads and rely on SSE for instant updates.
+    const timer = setInterval(pollTyping, 30000);
 
     return () => {
       stopped = true;
