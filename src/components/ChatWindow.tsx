@@ -109,6 +109,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const recordingTimerRef = useRef<any>(null);
   const typingTimerRef = useRef<any>(null);
+  const typingStartTimerRef = useRef<any>(null);
   const isTypingActiveRef = useRef<boolean>(false);
   const longPressTimerRef = useRef<any>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -274,20 +275,37 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     setInputText(val);
 
     if (val.trim()) {
-      if (!isTypingActiveRef.current) {
-        isTypingActiveRef.current = true;
-        apiSetTyping(chat.id, true).catch(() => {});
+      // Ignore very short typing bursts (e.g. a single quick keystroke) so
+      // they do not create unnecessary D1 typing-status writes.
+      if (!isTypingActiveRef.current && !typingStartTimerRef.current) {
+        typingStartTimerRef.current = setTimeout(() => {
+          typingStartTimerRef.current = null;
+          isTypingActiveRef.current = true;
+          apiSetTyping(chat.id, true).catch(() => {});
+        }, 500);
       }
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-      // Stop typing state sooner after the user pauses, reducing D1 writes.
+      // Stop typing state after a brief pause to bound DB writes per burst.
       typingTimerRef.current = setTimeout(() => {
-        isTypingActiveRef.current = false;
-        apiSetTyping(chat.id, false).catch(() => {});
+        if (typingStartTimerRef.current) {
+          clearTimeout(typingStartTimerRef.current);
+          typingStartTimerRef.current = null;
+        }
+        if (isTypingActiveRef.current) {
+          isTypingActiveRef.current = false;
+          apiSetTyping(chat.id, false).catch(() => {});
+        }
       }, 2000);
     } else {
+      if (typingStartTimerRef.current) {
+        clearTimeout(typingStartTimerRef.current);
+        typingStartTimerRef.current = null;
+      }
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-      isTypingActiveRef.current = false;
-      apiSetTyping(chat.id, false).catch(() => {});
+      if (isTypingActiveRef.current) {
+        isTypingActiveRef.current = false;
+        apiSetTyping(chat.id, false).catch(() => {});
+      }
     }
   };
 
@@ -321,8 +339,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     if (e) e.preventDefault();
     if (!inputText.trim()) return;
 
+    if (typingStartTimerRef.current) clearTimeout(typingStartTimerRef.current);
+    typingStartTimerRef.current = null;
     if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-    apiSetTyping(chat.id, false).catch(() => {});
+    if (isTypingActiveRef.current) apiSetTyping(chat.id, false).catch(() => {});
+    isTypingActiveRef.current = false;
 
     // If Editing
     if (editingMessage) {
