@@ -245,31 +245,39 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   }, [messages?.[messages.length - 1]?.id, chat.id, currentUser.id]);
 
-  // Mark messages as read only after the chat has remained visible for 6 seconds.
-  // Debouncing prevents a DB write on every incoming message/render.
+  // Mark messages read after the selected chat stays visible for 6 seconds.
+  // On some Android/PWA browsers document.hasFocus() can remain false even
+  // while the app is visible, so visibility is the reliable foreground check.
+  // Re-arm only when the chat or incoming message count changes.
   useEffect(() => {
-    if (!chat || !chat.id) return;
+    if (!chat?.id) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+
     const scheduleRead = () => {
       if (timer) clearTimeout(timer);
       timer = null;
-      if (document.hasFocus() && document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible') {
         timer = setTimeout(() => {
-          if (document.hasFocus() && document.visibilityState === 'visible') {
-            apiMarkRead(chat.id).then(() => onReadMarked?.(chat.id)).catch(() => {});
+          if (!cancelled && document.visibilityState === 'visible') {
+            apiMarkRead(chat.id)
+              .then(() => onReadMarked?.(chat.id))
+              .catch(() => {});
           }
         }, 6000);
       }
     };
+
     scheduleRead();
     window.addEventListener('focus', scheduleRead);
     document.addEventListener('visibilitychange', scheduleRead);
     return () => {
+      cancelled = true;
       if (timer) clearTimeout(timer);
       window.removeEventListener('focus', scheduleRead);
       document.removeEventListener('visibilitychange', scheduleRead);
     };
-  }, [chat.id, (messages || []).length]);
+  }, [chat?.id, (messages || []).length]);
 
   // Handle Input Typing with Debounce
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
