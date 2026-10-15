@@ -242,20 +242,29 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   }, [messages?.[messages.length - 1]?.id, chat.id, currentUser.id]);
 
-  // Read Receipts Trigger
+  // Mark messages as read only after the chat has remained visible for 6 seconds.
+  // Debouncing prevents a DB write on every incoming message/render.
   useEffect(() => {
     if (!chat || !chat.id) return;
-    const markReadIfVisible = () => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRead = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
       if (document.hasFocus() && document.visibilityState === 'visible') {
-        apiMarkRead(chat.id).catch(() => {});
+        timer = setTimeout(() => {
+          if (document.hasFocus() && document.visibilityState === 'visible') {
+            apiMarkRead(chat.id).catch(() => {});
+          }
+        }, 6000);
       }
     };
-    markReadIfVisible();
-    window.addEventListener('focus', markReadIfVisible);
-    document.addEventListener('visibilitychange', markReadIfVisible);
+    scheduleRead();
+    window.addEventListener('focus', scheduleRead);
+    document.addEventListener('visibilitychange', scheduleRead);
     return () => {
-      window.removeEventListener('focus', markReadIfVisible);
-      document.removeEventListener('visibilitychange', markReadIfVisible);
+      if (timer) clearTimeout(timer);
+      window.removeEventListener('focus', scheduleRead);
+      document.removeEventListener('visibilitychange', scheduleRead);
     };
   }, [chat.id, (messages || []).length]);
 
@@ -273,7 +282,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       typingTimerRef.current = setTimeout(() => {
         isTypingActiveRef.current = false;
         apiSetTyping(chat.id, false).catch(() => {});
-      }, 2500);
+      }, 4000);
     } else {
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       isTypingActiveRef.current = false;
