@@ -1345,7 +1345,7 @@ export default function App() {
     const syncInterval =
       setInterval(
         pollSync,
-        30000
+        60000
       );
 
     const handleVisibilityChange =
