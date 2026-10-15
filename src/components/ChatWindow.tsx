@@ -279,10 +279,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         apiSetTyping(chat.id, true).catch(() => {});
       }
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      // Stop typing state sooner after the user pauses, reducing D1 writes.
       typingTimerRef.current = setTimeout(() => {
         isTypingActiveRef.current = false;
         apiSetTyping(chat.id, false).catch(() => {});
-      }, 4000);
+      }, 2000);
     } else {
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       isTypingActiveRef.current = false;
