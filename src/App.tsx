@@ -1345,7 +1345,7 @@ export default function App() {
     const syncInterval =
       setInterval(
         pollSync,
-        15000
+        30000
       );
 
     const handleVisibilityChange =
@@ -1414,7 +1414,7 @@ export default function App() {
     };
 
     pollTyping();
-    const timer = setInterval(pollTyping, 5000);
+    const timer = setInterval(pollTyping, 15000);
 
     return () => {
       stopped = true;
