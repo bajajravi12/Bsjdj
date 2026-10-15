@@ -520,7 +520,7 @@ async function getD1UserByUsername(
   }
 }
 
-async function getD1UserById(db: any, id: string): Promise<ServerUser | null> {
+async function getD1UserById(db: any, id: string, throwOnError = false): Promise<ServerUser | null> {
   if (!db) return null;
   try {
     const row: any = await db.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
@@ -539,17 +539,18 @@ async function getD1UserById(db: any, id: string): Promise<ServerUser | null> {
     };
     usersDb[user.id] = user;
     return user;
-  } catch {
+  } catch (error) {
+    if (throwOnError) throw error;
     return null;
   }
 }
 
-async function getFullUser(db: any, id: string): Promise<ServerUser | null> {
+async function getFullUser(db: any, id: string, throwOnError = false): Promise<ServerUser | null> {
   if (usersDb[id] && usersDb[id].name && usersDb[id].username) {
     return usersDb[id];
   }
   if (db) {
-    const d1User = await getD1UserById(db, id);
+    const d1User = await getD1UserById(db, id, throwOnError);
     if (d1User) return d1User;
   }
   return null;
@@ -1097,7 +1098,19 @@ export default {
         if (!decodedUser) {
           return jsonResponse({ error: 'Unauthorized: Invalid or missing token' }, 401);
         }
-        let user = await getFullUser(env.DB, decodedUser.id);
+        let user: ServerUser | null;
+        try {
+          user = await getFullUser(env.DB, decodedUser.id, true);
+        } catch (error: any) {
+          const detail = String(error?.message || '');
+          const isD1Limit = /D1.*(limit|exceed)|daily row read limit|daily row write limit/i.test(detail);
+          return jsonResponse({
+            error: isD1Limit
+              ? 'Database daily limit reached. Your account was not deleted. Please try again after the D1 quota resets.'
+              : 'Database temporarily unavailable. Your account was not deleted; please try again shortly.',
+            code: isD1Limit ? 'D1_LIMIT_REACHED' : 'AUTH_DATABASE_UNAVAILABLE'
+          }, 503);
+        }
         if (!user) {
           return jsonResponse({ error: 'Unauthorized: Account not found or deleted' }, 401);
         }
