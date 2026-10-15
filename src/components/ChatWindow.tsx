@@ -53,6 +53,7 @@ interface ChatWindowProps {
   onPinMessage?: (chatId: string, messageId: string | null) => void;
   allChats?: Chat[];
   onForwardMessage?: (targetChatId: string, message: Message) => void;
+  onReadMarked?: (chatId: string) => void;
 }
 
 export const ChatWindow: React.FC<ChatWindowProps> = ({
@@ -69,6 +70,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   onPinMessage,
   allChats = [],
   onForwardMessage,
+  onReadMarked,
 }) => {
   const [inputText, setInputText] = useState('');
   const [replyToMessage, setReplyToMessage] = useState<{ id: string; text: string } | null>(null);
@@ -254,7 +256,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       if (document.hasFocus() && document.visibilityState === 'visible') {
         timer = setTimeout(() => {
           if (document.hasFocus() && document.visibilityState === 'visible') {
-            apiMarkRead(chat.id).catch(() => {});
+            apiMarkRead(chat.id).then(() => onReadMarked?.(chat.id)).catch(() => {});
           }
         }, 6000);
       }
