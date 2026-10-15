@@ -489,7 +489,11 @@ function jsonResponse(data: any, status = 200): Response {
 }
 
 // D1 Sync Helpers
-async function getD1UserByUsername(db: any, username: string): Promise<ServerUser | null> {
+async function getD1UserByUsername(
+  db: any,
+  username: string,
+  throwOnError = false
+): Promise<ServerUser | null> {
   if (!db) return null;
   try {
     const row: any = await db.prepare('SELECT * FROM users WHERE LOWER(username) = ?').bind(username.toLowerCase()).first();
@@ -508,7 +512,10 @@ async function getD1UserByUsername(db: any, username: string): Promise<ServerUse
     };
     usersDb[user.id] = user;
     return user;
-  } catch {
+  } catch (error) {
+    // During D1 quota exhaustion, a failed lookup is NOT proof that the
+    // account does not exist. Auth routes can opt into propagating this error.
+    if (throwOnError) throw error;
     return null;
   }
 }
@@ -1044,7 +1051,7 @@ export default {
 
           let user = Object.values(usersDb).find((u) => u.username.toLowerCase() === cleanUsername);
           if (!user && env.DB) {
-            user = (await getD1UserByUsername(env.DB, cleanUsername)) || undefined;
+            user = (await getD1UserByUsername(env.DB, cleanUsername, true)) || undefined;
             if (user) {
               usersDb[user.id] = user;
             }
@@ -1073,7 +1080,15 @@ export default {
             message: 'Login successful.',
           });
         } catch (err: any) {
-          return jsonResponse({ error: err?.message || 'Login failed' }, 500);
+          const detail = String(err?.message || '');
+          const isD1Limit = /D1.*(limit|exceed)|daily row read limit|daily row write limit/i.test(detail);
+          console.error('[auth/login] D1 lookup failed:', detail);
+          return jsonResponse({
+            error: isD1Limit
+              ? 'Database daily limit reached. Your account was not deleted. Please try again after the D1 quota resets.'
+              : 'Login service is temporarily unavailable. Your account was not deleted; please try again shortly.',
+            code: isD1Limit ? 'D1_LIMIT_REACHED' : 'AUTH_DATABASE_UNAVAILABLE'
+          }, 503);
         }
       }
 
