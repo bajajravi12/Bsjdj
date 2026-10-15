@@ -2552,6 +2552,15 @@ export default function App() {
               onForwardMessage={
                 handleForwardMessage
               }
+              onReadMarked={(chatId) => {
+                setChats((prev) =>
+                  prev.map((item) =>
+                    item.id === chatId
+                      ? { ...item, unreadCount: 0 }
+                      : item
+                  )
+                );
+              }}
             />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center bg-slate-950 p-6 text-center text-slate-500 space-y-3">
