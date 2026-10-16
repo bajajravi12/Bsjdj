@@ -493,7 +493,7 @@ export const apiMarkRead = async (
   }
 
   try {
-    await fetch(
+    const response = await fetch(
       `${API_BASE}/chats/${encodeURIComponent(chatId)}/read`,
       {
         method: 'POST',
@@ -503,8 +503,11 @@ export const apiMarkRead = async (
         keepalive: true,
       }
     );
+    if (!response.ok) return false;
+    const result = await response.json().catch(() => null);
+    return Boolean(result?.success);
   } catch {
-    // non-critical
+    return false;
   }
 };
 
