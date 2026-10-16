@@ -33,6 +33,7 @@ import {
   apiGetTyping,
   subscribeRealtimeEvents,
   apiSync,
+  apiMarkRead,
   clearAuthToken,
   getAuthToken
 } from './services/api';
@@ -516,7 +517,7 @@ export default function App() {
                 const isCurrentActive =
                   activeChatIdRef.current ===
                     chatId &&
-                  document.hasFocus();
+                  document.visibilityState === 'visible';
 
                 return {
                   ...chat,
@@ -601,7 +602,7 @@ export default function App() {
               const isViewingCurrentChat =
                 activeChatIdRef.current ===
                   chatId &&
-                document.hasFocus();
+                document.visibilityState === 'visible';
 
               if (!isViewingCurrentChat) {
                 showNativeNotification(
@@ -1206,7 +1207,7 @@ export default function App() {
                     const isViewingCurrentChat =
                       activeChatIdRef.current ===
                         cId &&
-                      document.hasFocus();
+                      document.visibilityState === 'visible';
 
                     if (
                       !isViewingCurrentChat &&
@@ -1398,7 +1399,7 @@ export default function App() {
 
     let stopped = false;
     const pollTyping = async () => {
-      if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
+      if (document.visibilityState !== 'visible' || !document.visibilityState === 'visible') return;
       const result = await apiGetTyping(activeChatId);
       if (stopped) return;
 
@@ -1601,6 +1602,26 @@ export default function App() {
             : chat
         )
       );
+
+      // Mark incoming messages read immediately when the user opens the chat.
+      // This clears the badge and emits read receipts without waiting for a timer.
+      apiMarkRead(chatId).then((success) => {
+        if (!success) return;
+        setMessagesMap((prev) => ({
+          ...prev,
+          [chatId]: (prev[chatId] || []).map((message) =>
+            message.senderId !== currentUser?.id &&
+            message.status !== 'read'
+              ? { ...message, status: 'read' }
+              : message
+          )
+        }));
+        setChats((prev) =>
+          (prev || []).map((chat) =>
+            chat.id === chatId ? { ...chat, unreadCount: 0 } : chat
+          )
+        );
+      }).catch(() => {});
 
       apiFetchMessages(
         chatId
