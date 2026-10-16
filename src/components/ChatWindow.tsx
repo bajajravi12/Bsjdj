@@ -245,39 +245,32 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     }
   }, [messages?.[messages.length - 1]?.id, chat.id, currentUser.id]);
 
-  // Mark messages read after the selected chat stays visible for 6 seconds.
-  // On some Android/PWA browsers document.hasFocus() can remain false even
-  // while the app is visible, so visibility is the reliable foreground check.
-  // Re-arm only when the chat or incoming message count changes.
+  // Mark messages read immediately when this conversation is open and visible.
+  // Re-run when a new message arrives so the sender receives the read receipt
+  // even if the recipient backs out shortly afterwards.
   useEffect(() => {
-    if (!chat?.id) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    if (!chat?.id || document.visibilityState !== 'visible') return;
     let cancelled = false;
 
-    const scheduleRead = () => {
-      if (timer) clearTimeout(timer);
-      timer = null;
-      if (document.visibilityState === 'visible') {
-        timer = setTimeout(() => {
-          if (!cancelled && document.visibilityState === 'visible') {
-            apiMarkRead(chat.id)
-              .then((success) => {
-                if (success) onReadMarked?.(chat.id);
-              })
-              .catch(() => {});
-          }
-        }, 6000);
-      }
+    const markVisibleChatRead = () => {
+      if (cancelled || document.visibilityState !== 'visible') return;
+      apiMarkRead(chat.id)
+        .then((success) => {
+          if (!cancelled && success) onReadMarked?.(chat.id);
+        })
+        .catch(() => {});
     };
 
-    scheduleRead();
-    window.addEventListener('focus', scheduleRead);
-    document.addEventListener('visibilitychange', scheduleRead);
+    markVisibleChatRead();
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') markVisibleChatRead();
+    };
+    window.addEventListener('focus', handleVisibility);
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
-      window.removeEventListener('focus', scheduleRead);
-      document.removeEventListener('visibilitychange', scheduleRead);
+      window.removeEventListener('focus', handleVisibility);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [chat?.id, (messages || []).length]);
 
