@@ -261,7 +261,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         timer = setTimeout(() => {
           if (!cancelled && document.visibilityState === 'visible') {
             apiMarkRead(chat.id)
-              .then(() => onReadMarked?.(chat.id))
+              .then((success) => {
+                if (success) onReadMarked?.(chat.id);
+              })
               .catch(() => {});
           }
         }, 6000);
