@@ -1077,8 +1077,8 @@ export default function App() {
   /*
    * Background fallback sync.
    *
-   * SSE handles realtime.
-   * This runs every 15 seconds as a lower-query cross-instance fallback.
+   * SSE is the instant path; this 6-second poll is only the cross-instance
+   * fallback for messages and read receipts. Keep it moderate to limit D1 reads.
    */
   useEffect(() => {
     if (!isLoggedIn || !currentUser) {
@@ -1346,7 +1346,7 @@ export default function App() {
     const syncInterval =
       setInterval(
         pollSync,
-        60000
+        6000
       );
 
     const handleVisibilityChange =
