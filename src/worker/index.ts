@@ -1705,35 +1705,22 @@ export default {
           try {
             const now = new Date().toISOString();
 
-            // Only mark the newest 50 incoming unread messages as read.
-            // This keeps read-receipt work bounded for very long chats and
-            // avoids touching thousands of historical rows at once.
-            // Read receipts are batched: only fetch and update the newest 50
-            // unread incoming messages per request, never scan/update every
-            // unread message in a long-running chat at once.
+            // Mark all currently unread incoming messages in this chat as read.
+            // The composite index on (chat_id, sender_id, status) keeps this
+            // targeted to the current conversation and avoids the old LIMIT 50
+            // bug where the badge cleared but older unread messages stayed unread.
             const unreadRows: any = await env.DB.prepare(
-              `SELECT id FROM messages
+              `UPDATE messages
+               SET status = 'read', updated_at = ?
                WHERE chat_id = ?
                  AND sender_id != ?
                  AND status IN ('sent', 'delivered', 'sending')
-               ORDER BY iso_date DESC
-               LIMIT 50`
-            ).bind(chatId, currentUserId).all();
+               RETURNING id`
+            ).bind(now, chatId, currentUserId).all();
 
             readMessageIds = (unreadRows?.results || [])
               .map((row: any) => row.id)
               .filter(Boolean);
-
-            if (readMessageIds.length > 0) {
-              // Update only the IDs selected above. Updating every unread row
-              // here caused a large write/read spike in chats with long history.
-              const placeholders = readMessageIds.map(() => '?').join(', ');
-              await env.DB.prepare(
-                `UPDATE messages
-                 SET status = 'read', updated_at = ?
-                 WHERE id IN (${placeholders})`
-              ).bind(now, ...readMessageIds).run();
-            }
           } catch (e) {
             console.error('Failed to update message read status in D1:', e);
           }
